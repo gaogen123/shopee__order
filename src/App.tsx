@@ -470,6 +470,10 @@ const mockOrders: Order[] = [
 
 import { Sidebar } from "./components/Sidebar";
 
+
+
+// ... (existing helper function nearby, handled via imports)
+
 export default function App() {
   const [currentView, setCurrentView] = useState<'orders' | 'mappings'>('orders');
   const [searchQuery, setSearchQuery] = useState("");
@@ -502,6 +506,9 @@ export default function App() {
   const [sortField, setSortField] = useState<SortField>('none');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [currentSyncTaskId, setCurrentSyncTaskId] = useState<string | undefined>(undefined);
+
+
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [costStatus, setCostStatus] = useState<CostStatus>('all');
   const [selectedOrderDetail, setSelectedOrderDetail] = useState<Order | null>(null);
@@ -509,7 +516,7 @@ export default function App() {
   const [showMappingManager, setShowMappingManager] = useState(false);
 
   // Fetch orders from API
-  useEffect(() => {
+  const fetchOrders = () => {
     setIsLoadingOrders(true);
     fetch('http://localhost:8000/api/orders?limit=100')
       .then(res => res.json())
@@ -518,25 +525,29 @@ export default function App() {
           // Transform backend order format to frontend Order format
           const transformedOrders: Order[] = data.orders.map((apiOrder: any, index: number) => {
             // Map order status
-            const statusMap: Record<string, 'pending' | 'processing' | 'shipped' | 'completed'> = {
+            const statusMap: Record<string, 'pending' | 'processing' | 'shipped' | 'completed' | 'cancelled'> = {
               'UNPAID': 'pending',
               'READY_TO_SHIP': 'processing',
               'SHIPPED': 'shipped',
               'COMPLETED': 'completed',
-              'IN_CANCEL': 'pending',
-              'CANCELLED': 'pending',
-              'TO_RETURN': 'shipped',
+              'IN_CANCEL': 'cancelled',
+              'CANCELLED': 'cancelled',
+              'TO_RETURN': 'cancelled',
               'PROCESSED': 'processing',
+              'TO_CONFIRM_RECEIVE': 'shipped',
+              'RETRY_SHIP': 'processing',
             };
             const statusTextMap: Record<string, string> = {
               'UNPAID': '待付款',
-              'READY_TO_SHIP': '待发货',
-              'SHIPPED': '运输中',
+              'READY_TO_SHIP': '待出货',
+              'SHIPPED': '运送中',
               'COMPLETED': '已完成',
               'IN_CANCEL': '取消中',
               'CANCELLED': '已取消',
               'TO_RETURN': '退货中',
               'PROCESSED': '已处理',
+              'TO_CONFIRM_RECEIVE': '运送中',
+              'RETRY_SHIP': '重新发货',
             };
 
             // Extract items from API response
@@ -558,15 +569,43 @@ export default function App() {
             // Find shop's region as siteId
             const shop = shopOptions.find(s => s.value === shopId);
             const siteId = shop?.siteId || '';
+            const shopName = shop?.label || '';
+
+            // Find site name
+            const site = siteOptions.find(s => s.value === siteId);
+            const siteName = site?.label || '';
+
+            const rawStatus = (apiOrder.order_status || '').trim();
+            const mappedStatus = statusMap[rawStatus] || 'processing';
+            const mappedStatusText = statusTextMap[rawStatus] || rawStatus;
+
+            const financials = apiOrder.financials || {};
+
+            // Calculate Net Shipping for display purposes to match Detail View
+            // (Est Shipping - Actual Shipping)
+            // Note: Use financials.estimated_shipping_fee if available (from escrow), else fallback to order level
+            const estShip = financials.estimated_shipping_fee !== undefined ? financials.estimated_shipping_fee : (apiOrder.estimated_shipping_fee || 0);
+            const actShip = financials.actual_shipping_fee || 0;
+            const netShipping = estShip - actShip;
+
+            const currency = apiOrder.currency || 'BRL';
+            const fallbackRates: { [key: string]: number } = {
+              'BRL': 1.25, 'USD': 7.2, 'SGD': 5.3, 'MYR': 1.6,
+              'PHP': 0.13, 'IDR': 0.00046, 'THB': 0.2, 'VND': 0.00029, 'TWD': 0.23,
+              'CNY': 1
+            };
+            const exchangeRate = fallbackRates[currency] || 1;
 
             return {
               id: apiOrder.order_sn || `order-${index}`,
               orderNumber: apiOrder.order_sn || '',
               username: apiOrder.buyer_username || '',
-              status: statusMap[apiOrder.order_status] || 'processing',
-              statusText: statusTextMap[apiOrder.order_status] || apiOrder.order_status || '',
+              status: mappedStatus,
+              statusText: mappedStatusText,
               siteId: siteId,
+              siteName: siteName,
               shopId: shopId,
+              shopName: shopName,
               orderDate: apiOrder.create_time
                 ? new Date(apiOrder.create_time * 1000).toISOString().split('T')[0]
                 : '',
@@ -578,9 +617,12 @@ export default function App() {
                 price: apiOrder.total_amount || 0,
                 image: 'https://via.placeholder.com/80',
               }],
-              shippingFee: apiOrder.estimated_shipping_fee || 0,
-              otherFees: 0,
+              shippingFee: netShipping,
+              otherFees: financials.total_fees || 0,
+              estimatedRevenue: financials.order_income, // Use accurate revenue from backend
               manualTotalCost: apiOrder.total_cost || undefined, // 采购总成本（订单级别）
+              currency: currency,
+              exchangeRate: exchangeRate
             };
           });
           setOrders(transformedOrders);
@@ -591,6 +633,10 @@ export default function App() {
         console.error("Failed to fetch orders:", err);
         setIsLoadingOrders(false);
       });
+  };
+
+  useEffect(() => {
+    fetchOrders();
   }, [shopOptions]);
 
   // Helper function to check if an order has cost recorded
@@ -622,6 +668,7 @@ export default function App() {
       processing: 0,
       shipped: 0,
       completed: 0,
+      cancelled: 0,
     };
 
     filteredByLocation.forEach(order => {
@@ -737,17 +784,39 @@ export default function App() {
           bValue = b.otherFees || 0;
         } else if (sortField === 'revenue') {
           // 预估订单收入
-          const aProductTotal = a.items.reduce((sum, item) => sum + (item.price || 0) * item.quantity, 0);
-          const aTotalCost = a.manualTotalCost !== undefined
-            ? a.manualTotalCost
-            : a.items.reduce((sum, item) => sum + ((item.purchaseCost || 0) + (item.domesticShippingCost || 0)) * item.quantity, 0);
-          aValue = aProductTotal - aTotalCost - (a.shippingFee || 0) - (a.otherFees || 0);
+          // Helper to get revenue logic
+          const getRevenue = (order: Order) => {
+            const productTotal = order.items.reduce((sum, item) => sum + (item.price || 0) * item.quantity, 0);
+            return order.estimatedRevenue !== undefined
+              ? order.estimatedRevenue
+              : (productTotal - (order.shippingFee || 0) - (order.otherFees || 0));
+          };
+          aValue = getRevenue(a);
+          bValue = getRevenue(b);
+        } else if (sortField === 'profit') {
+          // 预估利润
+          // Formula: (Revenue * ExchangeRate) - Cost
+          const calculateProfit = (order: Order) => {
+            const productTotal = order.items.reduce((sum, item) => sum + (item.price || 0) * item.quantity, 0);
 
-          const bProductTotal = b.items.reduce((sum, item) => sum + (item.price || 0) * item.quantity, 0);
-          const bTotalCost = b.manualTotalCost !== undefined
-            ? b.manualTotalCost
-            : b.items.reduce((sum, item) => sum + ((item.purchaseCost || 0) + (item.domesticShippingCost || 0)) * item.quantity, 0);
-          bValue = bProductTotal - bTotalCost - (b.shippingFee || 0) - (b.otherFees || 0);
+            // Revenue (Native Currency)
+            const revenue = order.estimatedRevenue !== undefined
+              ? order.estimatedRevenue
+              : (productTotal - (order.shippingFee || 0) - (order.otherFees || 0));
+
+            // Cost (RMB)
+            const totalCost = order.manualTotalCost !== undefined
+              ? order.manualTotalCost
+              : order.items.reduce((sum, item) => sum + ((item.purchaseCost || 0) + (item.domesticShippingCost || 0)) * item.quantity, 0);
+
+            // Exchange Rate
+            const rate = order.exchangeRate || 1;
+
+            return (revenue * rate) - totalCost;
+          };
+
+          aValue = calculateProfit(a);
+          bValue = calculateProfit(b);
         }
 
         if (sortDirection === 'asc') {
@@ -840,12 +909,65 @@ export default function App() {
   };
 
   const handleSyncOrders = () => {
-    setIsSyncing(true);
+    if (selectedSite === 'all') {
+      toast.error("请选择站点");
+      return;
+    }
+    if (selectedShop === 'all') {
+      toast.error("请选择店铺");
+      return;
+    }
+
+    const shopId = selectedShop;
+
+    // Parse date range
+    const [startStr, endStr] = dateRange.split(' 至 ');
+    if (!startStr || !endStr) {
+      toast.error("请选择日期范围");
+      return;
+    }
+
+    const fromDate = new Date(startStr);
+    const toDate = new Date(endStr);
+
+    // Set time to beginning of day and end of day
+    fromDate.setHours(0, 0, 0, 0);
+    toDate.setHours(23, 59, 59, 999);
+
+    const timeFrom = Math.floor(fromDate.getTime() / 1000);
+    const timeTo = Math.floor(toDate.getTime() / 1000);
+
+    // Call API
+    fetch('http://localhost:8000/api/sync_orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shop_id: parseInt(shopId),
+        time_from: timeFrom,
+        time_to: timeTo
+      })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'accepted') {
+          setCurrentSyncTaskId(data.task_id);
+          setIsSyncing(true);
+          toast.info("同步任务已开始");
+        } else {
+          toast.error("同步启动失败");
+        }
+      })
+      .catch(err => {
+        console.error("Sync error:", err);
+        toast.error("同步请求失败");
+      });
   };
 
   const handleSyncComplete = () => {
     setIsSyncing(false);
+    setCurrentSyncTaskId(undefined);
     toast.success("订单已同步成功");
+    fetchOrders(); // Reload orders
   };
 
   const handleDateRangeChange = (range: string) => {
@@ -892,7 +1014,47 @@ export default function App() {
       toast.error("请先选择要同步的订单");
       return;
     }
-    setIsSyncing(true);
+
+    const itemsToSync: { order_sn: string, shop_id: number }[] = [];
+    selectedOrders.forEach(orderId => {
+      const order = orders.find(o => o.id === orderId);
+      if (order) {
+        // Ensure shopId is valid number. If it's missing or invalid, we might skip or error.
+        // Assuming shopId is stored as string in Order but numeric in nature.
+        const sId = parseInt(order.shopId);
+        if (!isNaN(sId)) {
+          itemsToSync.push({
+            order_sn: order.orderNumber,
+            shop_id: sId
+          });
+        }
+      }
+    });
+
+    if (itemsToSync.length === 0) {
+      toast.error("无法获取选中订单的店铺信息");
+      return;
+    }
+
+    fetch('http://localhost:8000/api/sync_batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: itemsToSync })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'accepted') {
+          setCurrentSyncTaskId(data.task_id);
+          setIsSyncing(true);
+          toast.info("同步任务已开始");
+        } else {
+          toast.error("同步启动失败");
+        }
+      })
+      .catch(err => {
+        console.error("Batch sync error:", err);
+        toast.error("同步请求失败");
+      });
   };
 
   const allSelected = paginatedOrders.length > 0 && paginatedOrders.every(order => selectedOrders.has(order.id));
@@ -954,10 +1116,16 @@ export default function App() {
   return (
     <div className="flex h-screen w-full bg-gray-50 overflow-hidden">
       <Toaster />
+// SyncOrderModal removed
+
       <Sidebar activeTab={currentView} onTabChange={setCurrentView} />
 
       <main className="flex-1 flex flex-col h-screen overflow-y-auto" style={{ marginLeft: '264px' }}>
-        <SyncProgress isVisible={isSyncing} onComplete={handleSyncComplete} />
+        <SyncProgress
+          isVisible={isSyncing}
+          taskId={currentSyncTaskId}
+          onComplete={handleSyncComplete}
+        />
 
         {/* 订单详情视图 */}
         {selectedOrderDetail ? (

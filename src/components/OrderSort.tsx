@@ -1,6 +1,6 @@
 import { ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 
-export type SortField = 'productTotal' | 'purchaseCost' | 'shippingFee' | 'otherFees' | 'revenue' | 'none';
+export type SortField = 'productTotal' | 'purchaseCost' | 'shippingFee' | 'otherFees' | 'revenue' | 'profit' | 'none';
 export type SortDirection = 'asc' | 'desc';
 
 interface OrderSortProps {
@@ -16,13 +16,14 @@ export function OrderSort({ sortField, sortDirection, onSortChange }: OrderSortP
     { value: 'shippingFee', label: '预估运费总额' },
     { value: 'otherFees', label: '费用' },
     { value: 'revenue', label: '预估订单收入' },
+    { value: 'profit', label: '预估利润' },
   ];
 
   const getSortIcon = (field: SortField) => {
     if (sortField !== field) {
       return <ArrowUpDown className="w-3 h-3 text-muted-foreground" />;
     }
-    return sortDirection === 'asc' 
+    return sortDirection === 'asc'
       ? <ArrowUp className="w-3 h-3 text-primary" />
       : <ArrowDown className="w-3 h-3 text-primary" />;
   };
@@ -38,8 +39,8 @@ export function OrderSort({ sortField, sortDirection, onSortChange }: OrderSortP
               onClick={() => onSortChange(option.value as SortField)}
               className={`
                 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-all
-                ${sortField === option.value 
-                  ? 'bg-primary text-primary-foreground shadow-sm' 
+                ${sortField === option.value
+                  ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
                 }
               `}

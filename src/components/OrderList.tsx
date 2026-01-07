@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, ChevronDown, RefreshCw, Store, Globe, Calculator, MoreHorizontal } from 'lucide-react';
+import { Search, ChevronDown, RefreshCw, Store, Globe, Calculator, MoreHorizontal, Sparkles, Save } from 'lucide-react';
 import { DateRangePicker } from './DateRangePicker';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -18,12 +18,15 @@ interface OrderSummary {
         item_id: number;
         item_name: string;
         image_info?: { image_url: string };
+        model_id?: number;
         model_name?: string;
+        model_sku?: string;
         model_quantity_purchased: number;
         model_discounted_price?: number;
         purchase_cost?: number;
         domestic_shipping_cost?: number;
     }>;
+    shop_id?: number;
     shipping_carrier?: string;
     purchase_cost?: number;
     domestic_shipping_cost?: number;
@@ -41,10 +44,31 @@ interface OrderListProps {
     refreshTrigger?: number;
 }
 
+interface CostMapping {
+    id: number;
+    siteId: string;
+    shopId: string;
+    productId: string;
+    productName: string;
+    sku: string;
+    purchaseCost: number;
+    domesticShippingCost: number;
+    createdAt: number;
+}
+
+interface Shop {
+    value: string;
+    label: string;
+    siteId: string;
+    region: string;
+}
+
 export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSaved, syncing, syncTask, refreshTrigger }: OrderListProps) {
     const [activeTab, setActiveTab] = useState('ALL');
     const [keyword, setKeyword] = useState('');
     const [orders, setOrders] = useState<OrderSummary[]>([]);
+    const [mappings, setMappings] = useState<CostMapping[]>([]);
+    const [shops, setShops] = useState<Shop[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
     const [loading, setLoading] = useState(false);
@@ -89,8 +113,32 @@ export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSave
     };
 
     useEffect(() => {
+        const fetchMappingsAndShops = async () => {
+            try {
+                const [mappingsRes, shopsRes] = await Promise.all([
+                    fetch('http://localhost:8000/api/mappings'),
+                    fetch('http://localhost:8000/api/shops')
+                ]);
+                const mappingsData = await mappingsRes.json();
+                const shopsData = await shopsRes.json();
+                setMappings(mappingsData);
+                setShops(shopsData.shops || []);
+            } catch (e) {
+                console.error("Failed to load mappings or shops", e);
+            }
+        };
+        fetchMappingsAndShops();
         fetchOrders();
     }, [activeTab, page, refreshTrigger]);
+
+    const handleMappingSaved = () => {
+        // Refresh mappings
+        fetch('http://localhost:8000/api/mappings')
+            .then(res => res.json())
+            .then(data => setMappings(data))
+            .catch(console.error);
+        if (onMappingSaved) onMappingSaved();
+    };
 
     const handleSearch = () => {
         setPage(1);
@@ -282,7 +330,10 @@ export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSave
                                 onSelect={() => onSelectOrder(order.order_sn)}
                                 selected={selectedSns.has(order.order_sn)}
                                 onToggleSelect={() => toggleSelect(order.order_sn)}
-                                onMappingSaved={onMappingSaved}
+                                onMappingSaved={handleMappingSaved}
+                                itemCosts={null} // Controlled internally if not provided
+                                mappings={mappings}
+                                shops={shops}
                             />
                         ))
                     )}
@@ -315,15 +366,20 @@ export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSave
     );
 }
 
-function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved }: {
+}
+
+function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved, mappings, shops, itemCosts: propItemCosts }: {
     order: OrderSummary,
     onSelect: () => void,
     selected: boolean,
     onToggleSelect: () => void,
-    onMappingSaved?: () => void
+    onMappingSaved?: () => void,
+    mappings?: CostMapping[],
+    shops?: Shop[],
+    itemCosts?: any
 }) {
     const [itemCosts, setItemCosts] = useState<{ [key: string]: { purchase: number, shipping: number } }>(
-        (order.item_list || []).reduce((acc, item, idx) => ({
+        propItemCosts || (order.item_list || []).reduce((acc, item, idx) => ({
             ...acc,
             [`${item.item_id}-${idx}`]: {
                 purchase: item.purchase_cost || 0,
@@ -359,27 +415,45 @@ function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved }
         }
     };
 
-    const handleSaveToMapping = async (itemId: number, modelName: string, idx: number) => {
+    const handleSaveToMapping = async (itemId: number, modelName: string, modelId: number | undefined, sku: string | undefined, idx: number) => {
         const key = `${itemId}-${idx}`;
         const cost = itemCosts[key];
+
+        // Find siteId from shopId
+        const shop = shops?.find(s => s.value === String(order.shop_id));
+        const siteId = shop?.siteId || "Unknown";
+
         setSaving(true);
         try {
             await fetch(`http://localhost:8000/api/mappings/save`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    site_id: siteId,
+                    shop_id: String(order.shop_id),
                     item_id: itemId,
-                    model_name: modelName || "",
+                    sku_id: sku || modelName || "",
+                    product_name: order.item_list[idx]?.item_name || "",
                     purchase_cost: cost.purchase,
                     domestic_shipping_cost: cost.shipping
                 })
             });
-            // Show notification logic?
+            if (onMappingSaved) onMappingSaved();
         } catch (e) {
             console.error(e);
         } finally {
             setSaving(false);
         }
+    };
+
+    const handleApplyMapping = async (itemId: number, modelName: string, idx: number, purchase: number, shipping: number) => {
+        const key = `${itemId}-${idx}`;
+        const nextCosts = { ...itemCosts, [key]: { purchase, shipping } };
+        setItemCosts(nextCosts);
+
+        // Also save to DB
+        handleUpdateCost(itemId, modelName, idx, 'purchase', String(purchase));
+        handleUpdateCost(itemId, modelName, idx, 'shipping', String(shipping));
     };
 
     const statusInfo = {
@@ -433,6 +507,21 @@ function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved }
                         const key = `${item.item_id}-${idx}`;
                         const cost = itemCosts[key] || { purchase: 0, shipping: 0 };
                         const itemTotalCost = cost.purchase * item.model_quantity_purchased + cost.shipping;
+
+                        // Check for mapping
+                        const shop = shops?.find(s => s.value === String(order.shop_id));
+                        const siteId = shop?.siteId || "";
+
+                        // 严格匹配：站点、店铺、商品ID和SKU
+                        const matchingMapping = mappings?.find(m =>
+                            m.siteId === siteId &&
+                            m.shopId === String(order.shop_id) &&
+                            m.productId === String(item.item_id) &&
+                            (m.sku === (item.model_sku || item.model_name || ""))
+                        );
+
+                        const isCostZero = cost.purchase === 0 && cost.shipping === 0;
+
                         return (
                             <div key={`${order.order_sn}-${item.item_id}-${idx}`} className="space-y-4">
                                 <div className="flex gap-6 items-start">
@@ -451,9 +540,41 @@ function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved }
                                                 ×{item.model_quantity_purchased}
                                             </div>
                                         </div>
-                                        <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">商品ID: {item.item_id}</div>
+                                        <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
+                                            ID: {item.item_id}
+                                            {item.model_sku && <span className="ml-2 text-gray-300">SKU: {item.model_sku}</span>}
+                                        </div>
                                     </div>
                                 </div>
+
+                                {/* Mapping Alert */}
+                                {matchingMapping && isCostZero && (
+                                    <div className="bg-gradient-to-r from-emerald-50 to-green-50 border border-emerald-100 rounded-xl p-3 flex items-center justify-between animate-in slide-in-from-top-2 duration-300">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
+                                                <Sparkles className="w-4 h-4 text-emerald-600" />
+                                            </div>
+                                            <div>
+                                                <div className="text-xs font-bold text-emerald-800 flex items-center gap-2">
+                                                    检测到成本映射
+                                                    <span className="bg-emerald-200/50 text-emerald-700 px-1.5 py-0.5 rounded text-[10px]">
+                                                        {matchingMapping.siteId} / {matchingMapping.sku || '无SKU'}
+                                                    </span>
+                                                </div>
+                                                <div className="text-[11px] text-emerald-600/80 mt-0.5 font-medium">
+                                                    采购: ¥{matchingMapping.purchaseCost} | 运费: ¥{matchingMapping.domesticShippingCost}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <Button
+                                            size="sm"
+                                            onClick={() => handleApplyMapping(item.item_id, item.model_name || "", idx, matchingMapping.purchaseCost, matchingMapping.domesticShippingCost)}
+                                            className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white border-0 shadow-lg shadow-emerald-500/20"
+                                        >
+                                            应用
+                                        </Button>
+                                    </div>
+                                )}
 
                                 <div className="bg-gray-50/50 rounded-2xl p-5 border border-gray-100/50 flex flex-wrap gap-8 items-end relative overflow-hidden">
                                     <div className="absolute top-0 right-0 p-2 opacity-10">
@@ -486,14 +607,17 @@ function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved }
                                     <div className="flex-1 min-w-[200px] flex flex-col items-end justify-center">
                                         <div className="flex flex-col items-end mb-1">
                                             <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">订单项总成本</span>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => handleSaveToMapping(item.item_id, item.model_name || "", idx)}
-                                                className="h-6 px-2 text-[9px] font-black text-orange-500 hover:text-orange-600 hover:bg-orange-50 -mr-2"
-                                            >
-                                                同步到成本库
-                                            </Button>
+                                            {(!isCostZero || cost.purchase > 0 || cost.shipping > 0) && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => handleSaveToMapping(item.item_id, item.model_name || "", item.model_id, item.model_sku, idx)}
+                                                    className="h-7 px-2 text-[10px] font-bold text-orange-500 hover:text-orange-600 hover:bg-orange-50 -mr-2 gap-1"
+                                                >
+                                                    <Save className="w-3 h-3" />
+                                                    保存成本映射
+                                                </Button>
+                                            )}
                                         </div>
                                         <span className="text-xl font-black text-gray-900 leading-none">¥ {itemTotalCost.toFixed(2)}</span>
                                     </div>

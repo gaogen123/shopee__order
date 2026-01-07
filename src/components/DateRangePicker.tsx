@@ -1,5 +1,6 @@
 import { Calendar as CalendarIcon } from "lucide-react";
 import { DateRange } from "react-day-picker";
+import { zhCN } from "date-fns/locale";
 import { useEffect, useState } from "react";
 
 import { cn } from "./ui/utils";
@@ -27,7 +28,10 @@ export function DateRangePicker({
   // 简单的日期解析函数: "YYYY-MM-DD" -> Date
   const parseDate = (dateStr: string) => {
     if (!dateStr) return undefined;
-    const [y, m, d] = dateStr.split('-').map(Number);
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return undefined;
+    const [y, m, d] = parts.map(Number);
+    if (isNaN(y) || isNaN(m) || isNaN(d)) return undefined;
     return new Date(y, m - 1, d);
   };
 
@@ -110,6 +114,7 @@ export function DateRangePicker({
             onSelect={handleSelect}
             numberOfMonths={2}
             className="p-3"
+            locale={zhCN}
           />
         </PopoverContent>
       </Popover>

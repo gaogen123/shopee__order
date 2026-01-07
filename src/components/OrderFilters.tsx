@@ -32,8 +32,9 @@ export function OrderFilters({
       </div>
 
       <DateRangePicker
-        dateRange={dateRange}
-        onDateRangeChange={onDateRangeChange}
+        startDate={dateRange.split(' 至 ')[0] || ''}
+        endDate={dateRange.split(' 至 ')[1] || ''}
+        onChange={(start, end) => onDateRangeChange(`${start} 至 ${end}`)}
       />
 
       <Button

@@ -21,15 +21,20 @@ export interface Order {
   id: string;
   orderNumber: string;
   username: string;
-  status: 'pending' | 'processing' | 'shipped' | 'completed';
+  status: 'pending' | 'processing' | 'shipped' | 'completed' | 'cancelled';
   statusText: string;
-  siteId?: string;
+  siteId?: string; // 站点 (region)
+  siteName?: string;
   shopId?: string;
+  shopName?: string;
   orderDate?: string; // 订单日期
   items: OrderItem[]; // 订单项数组
   manualTotalCost?: number; // 手动调整的订单总成本
-  shippingFee?: number; // 预估运费总额
+  shippingFee?: number; // 预估运费总额 (净额)
   otherFees?: number; // 其他费用
+  estimatedRevenue?: number; // 预估订单收入 (实际收入, 原币种)
+  currency?: string; // 币种
+  exchangeRate?: number; // 汇率
 }
 
 interface OrderCardProps {
@@ -59,14 +64,23 @@ export function OrderCard({ order, onViewDetails, onItemCostUpdate, onOrderTotal
   const displayTotalCost = order.manualTotalCost !== undefined ? order.manualTotalCost : orderTotalCost;
   const [manualTotalCost, setManualTotalCost] = useState(displayTotalCost.toString());
 
-  // Calculate estimated order revenue (预估订单收入)
-  const estimatedRevenue = productTotalAmount - displayTotalCost - (order.shippingFee || 0) - (order.otherFees || 0);
+  // Calculate estimated order revenue (预估订单收入) - 尽量使用准确值
+  const estimatedRevenue = order.estimatedRevenue !== undefined
+    ? order.estimatedRevenue
+    : (productTotalAmount + (order.shippingFee || 0) - (order.otherFees || 0));
+
+  // Calculate Estimated Profit (预估利润)
+  // Formula: (Revenue * ExchangeRate) - Cost
+  // Cost is in RMB, Revenue is in local currency
+  const exchangeRate = order.exchangeRate || 1;
+  const estimatedProfit = (estimatedRevenue * exchangeRate) - displayTotalCost;
 
   const statusColors = {
     pending: 'bg-orange-100 text-orange-700 border-orange-200',
     processing: 'bg-blue-100 text-blue-700 border-blue-200',
     shipped: 'bg-purple-100 text-purple-700 border-purple-200',
     completed: 'bg-green-100 text-green-700 border-green-200',
+    cancelled: 'bg-gray-100 text-gray-700 border-gray-200',
   };
 
   const handleManualTotalCostChange = (value: string) => {
@@ -97,6 +111,20 @@ export function OrderCard({ order, onViewDetails, onItemCostUpdate, onOrderTotal
         <div className="flex-1 flex items-start justify-between">
           <div className="flex-1">
             <div className="flex items-center gap-2 flex-wrap">
+              {(order.siteName || order.shopName) && (
+                <div className="flex items-center gap-1 mr-2">
+                  {order.siteName && (
+                    <Badge variant="secondary" className="bg-gray-100 text-gray-700 hover:bg-gray-200">
+                      {order.siteName}
+                    </Badge>
+                  )}
+                  {order.shopName && (
+                    <span className="text-sm font-semibold text-foreground">
+                      {order.shopName}
+                    </span>
+                  )}
+                </div>
+              )}
               <span className="text-sm text-muted-foreground">订单号: {order.orderNumber}</span>
               <Badge
                 variant="outline"
@@ -134,35 +162,61 @@ export function OrderCard({ order, onViewDetails, onItemCostUpdate, onOrderTotal
 
       {/* Order Financial Summary */}
       <div className="mt-4 pt-4 border-t-2 border-gray-200">
-        <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground mb-1">商品总额</span>
-              <span className="text-base font-semibold text-foreground">
-                ¥{productTotalAmount.toFixed(2)}
+        <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-3">
+          <div className="flex items-start justify-between gap-1 overflow-x-auto scrollbar-none">
+
+            <div className="flex flex-col min-w-[60px]">
+              <span className="text-[10px] text-muted-foreground font-medium whitespace-nowrap mb-0.5">商品总额</span>
+              <span className="text-sm font-bold text-foreground leading-tight">
+                <span className="text-[10px] text-muted-foreground font-normal mr-0.5">{order.currency || '¥'}</span>
+                {productTotalAmount.toFixed(2)}
               </span>
             </div>
 
-            <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground mb-1">预估运费总额</span>
-              <span className="text-base font-semibold text-orange-600">
-                ¥{(order.shippingFee || 0).toFixed(2)}
+            <div className="w-px bg-gray-200 mx-1 shrink-0 h-8 self-center" />
+
+            <div className="flex flex-col min-w-[60px]">
+              <span className="text-[10px] text-muted-foreground font-medium whitespace-nowrap mb-0.5">预估运费</span>
+              <span className="text-sm font-bold text-orange-600 leading-tight">
+                <span className="text-[10px] text-orange-400 font-normal mr-0.5">{order.currency || '¥'}</span>
+                {Math.abs(order.shippingFee || 0).toFixed(2)}
               </span>
             </div>
 
-            <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground mb-1">费用</span>
-              <span className="text-base font-semibold text-red-600">
-                ¥{(order.otherFees || 0).toFixed(2)}
+            <div className="w-px bg-gray-200 mx-1 shrink-0 h-8 self-center" />
+
+            <div className="flex flex-col min-w-[40px]">
+              <span className="text-[10px] text-muted-foreground font-medium whitespace-nowrap mb-0.5">费用</span>
+              <span className="text-sm font-bold text-red-600 leading-tight">
+                <span className="text-[10px] text-red-400 font-normal mr-0.5">{order.currency || '¥'}</span>
+                {(order.otherFees || 0).toFixed(2)}
               </span>
             </div>
 
-            <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground mb-1">预估订单收入</span>
-              <span className={`text-base font-bold ${estimatedRevenue >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                ¥{estimatedRevenue.toFixed(2)}
+            <div className="w-px bg-gray-200 mx-1 shrink-0 h-8 self-center" />
+
+            <div className="flex flex-col min-w-[70px]">
+              <span className="text-[10px] text-muted-foreground font-medium whitespace-nowrap mb-0.5">预估收入</span>
+              <span className={`text-sm font-bold leading-tight ${estimatedRevenue >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                <span className="text-[10px] opacity-70 font-normal mr-0.5">{order.currency || '¥'}</span>
+                {estimatedRevenue.toFixed(2)}
               </span>
             </div>
+
+            <div className="w-px bg-gray-300 mx-1 shrink-0 h-8 self-center" />
+
+            {/* Estimated Profit */}
+            <div className="flex flex-col min-w-[70px]">
+              <span className="text-[10px] text-gray-500 font-black whitespace-nowrap mb-0.5">预估利润(RMB)</span>
+              <span className={`text-base font-black leading-tight ${estimatedProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                <span className="text-[10px] text-gray-400 font-normal mr-0.5">¥</span>
+                {estimatedProfit.toFixed(2)}
+              </span>
+              {order.exchangeRate && (
+                <span className="text-[9px] text-gray-400 scale-90 origin-left mt-0.5">汇率: {order.exchangeRate}</span>
+              )}
+            </div>
+
           </div>
         </div>
       </div>
@@ -211,8 +265,13 @@ function OrderItemRow({ item, orderId, siteId, shopId, showDivider, onItemCostUp
   const [domesticShippingCost, setDomesticShippingCost] = useState(item.domesticShippingCost?.toString() || "");
 
   // Find matching cost mapping for this product
+  // 严格匹配：站点、店铺、商品ID和SKU，避免错误匹配不同ID的商品
   const matchingMapping = costMappings?.find(
-    mapping => mapping.productName.toLowerCase() === item.productName.toLowerCase()
+    mapping =>
+      mapping.siteId === siteId &&
+      mapping.shopId === shopId &&
+      mapping.productId === item.id && // 商品ID必须完全匹配
+      mapping.sku === (item.sku || "") // SKU也要匹配
   );
 
   // Check if current values match the mapping
