@@ -18,10 +18,34 @@ import sqlite3
 import json
 import os
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import time
 import hmac
 import hashlib
 from token_manager import get_valid_token, PARTNER_ID, PARTNER_KEY, HOST, ALL_SHOPS
+
+# 配置requests重试策略和SSL超时设置
+def create_session_with_retries():
+    """创建带有重试机制的requests session"""
+    session = requests.Session()
+    
+    # 配置重试策略：总共重试3次，对于连接错误、读取错误、超时等进行重试
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,  # 重试间隔：1s, 2s, 4s
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"]
+    )
+    
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    return session
+
+# 创建全局session
+api_session = create_session_with_retries()
 
 app = FastAPI()
 
@@ -121,13 +145,47 @@ def init_db_tables(conn):
             order_sn TEXT,
             item_id INTEGER,
             item_name TEXT,
+            model_id INTEGER,
             model_name TEXT,
+            model_sku TEXT,
             model_quantity_purchased INTEGER,
             model_discounted_price REAL,
             image_info TEXT,
             purchase_cost REAL DEFAULT 0,
             domestic_shipping_cost REAL DEFAULT 0,
             FOREIGN KEY(order_sn) REFERENCES orders(order_sn)
+        )
+    ''')
+    
+    # Check for new columns in order_items
+    try:
+        c.execute("SELECT model_id FROM order_items LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            c.execute("ALTER TABLE order_items ADD COLUMN model_id INTEGER")
+        except:
+            pass
+            
+    try:
+        c.execute("SELECT model_sku FROM order_items LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            c.execute("ALTER TABLE order_items ADD COLUMN model_sku TEXT")
+        except:
+            pass
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS cost_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            site_id TEXT,
+            shop_id TEXT,
+            item_id INTEGER,
+            sku_id TEXT,
+            product_name TEXT,
+            purchase_cost REAL DEFAULT 0,
+            domestic_shipping_cost REAL DEFAULT 0,
+            created_at INTEGER,
+            UNIQUE(site_id, shop_id, item_id, sku_id)
         )
     ''')
     
@@ -215,22 +273,52 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
         int(time.time())
     ))
     
-    # Save Items
+    # 在删除订单项之前，先保存现有的成本数据
+    # 这样可以防止再次同步订单时丢失用户手动输入的成本信息
+    c.execute('''
+        SELECT item_id, model_id, purchase_cost, domestic_shipping_cost 
+        FROM order_items 
+        WHERE order_sn = ?
+    ''', (order.get('order_sn'),))
+    
+    existing_costs = {}
+    for row in c.fetchall():
+        item_id = row[0]
+        model_id = row[1] if row[1] else 0
+        key = f"{item_id}_{model_id}"
+        existing_costs[key] = {
+            'purchase_cost': row[2] if row[2] else 0,
+            'domestic_shipping_cost': row[3] if row[3] else 0
+        }
+    
+    # Save Items - 删除并重新插入，但保留成本数据
     c.execute('DELETE FROM order_items WHERE order_sn = ?', (order.get('order_sn'),))
     for item in order.get('item_list', []):
+        item_id = item.get('item_id')
+        model_id = item.get('model_id', 0)
+        key = f"{item_id}_{model_id}"
+        
+        # 恢复之前保存的成本数据（如果存在）
+        costs = existing_costs.get(key, {'purchase_cost': 0, 'domestic_shipping_cost': 0})
+        
         c.execute('''
             INSERT INTO order_items (
-                order_sn, item_id, item_name, model_name, 
-                model_quantity_purchased, model_discounted_price, image_info
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                order_sn, item_id, item_name, model_id, model_name, model_sku,
+                model_quantity_purchased, model_discounted_price, image_info,
+                purchase_cost, domestic_shipping_cost
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             order.get('order_sn'),
-            item.get('item_id'),
+            item_id,
             item.get('item_name'),
+            model_id,
             item.get('model_name'),
+            item.get('model_sku'),
             item.get('model_quantity_purchased'),
             item.get('model_discounted_price'),
-            json.dumps(item.get('image_info', {}))
+            json.dumps(item.get('image_info', {})),
+            costs['purchase_cost'],  # 保留用户输入的采购成本
+            costs['domestic_shipping_cost']  # 保留用户输入的国内物流成本
         ))
     conn.commit()
 
@@ -260,7 +348,8 @@ def fetch_order_from_api(shop_id, order_sn):
     }
     
     try:
-        resp = requests.get(url, params=params)
+        # 使用带重试机制的session，并设置30秒超时
+        resp = api_session.get(url, params=params, timeout=30)
         data = resp.json()
         if "error" in data and data["error"]:
             print(f"API Error (Order): {data['message']}")
@@ -283,7 +372,8 @@ def fetch_escrow_detail(shop_id, order_sn):
     url = f"{HOST}{path}?partner_id={PARTNER_ID}&timestamp={timestamp}&access_token={token}&shop_id={shop_id}&sign={sign}&order_sn={order_sn}"
     
     try:
-        resp = requests.get(url)
+        # 使用带重试机制的session，并设置30秒超时
+        resp = api_session.get(url, timeout=30)
         data = resp.json()
         if "error" in data and data["error"]:
             print(f"API Error (Escrow Single): {data.get('message')}")
@@ -470,8 +560,8 @@ def get_orders(
     c.execute(f"SELECT count(*) FROM orders WHERE {where_str}", params)
     total = c.fetchone()[0]
     
-    # Fetch orders
-    query = f"SELECT raw_data, order_sn, order_status, total_amount, currency, create_time, buyer_username, shop_id, estimated_shipping_fee, total_cost FROM orders WHERE {where_str} ORDER BY create_time DESC LIMIT ? OFFSET ?"
+    # Fetch orders (Added escrow_data)
+    query = f"SELECT raw_data, order_sn, order_status, total_amount, currency, create_time, buyer_username, shop_id, estimated_shipping_fee, total_cost, escrow_data FROM orders WHERE {where_str} ORDER BY create_time DESC LIMIT ? OFFSET ?"
     params.append(limit)
     params.append((page - 1) * limit)
     
@@ -496,9 +586,44 @@ def get_orders(
         order['create_time'] = r['create_time']
         order['total_cost'] = r['total_cost'] or 0  # 采购总成本（订单级别）
         
+        # Calculate Financials from Escrow Data
+        escrow_info = {}
+        if r['escrow_data']:
+            try:
+                escrow_info = json.loads(r['escrow_data'])
+            except:
+                pass
+        
+        # Default financials (0 if no escrow data yet)
+        commission = float(escrow_info.get('commission_fee', 0))
+        service = float(escrow_info.get('service_fee', 0))
+        transaction = float(escrow_info.get('seller_transaction_fee', 0))
+        total_fees = commission + service + transaction
+        
+        # Calculate Order Income (Revenue)
+        # Priority: order_income_amount (direct from API) > buyer_total_amount - fees (fallback approximation)
+        order_income = escrow_info.get('order_income_amount')
+        if order_income is None:
+             # Fallback if specific field missing but we have others
+             if escrow_info.get('buyer_total_amount'):
+                 order_income = float(escrow_info.get('buyer_total_amount')) - total_fees
+             else:
+                 order_income = r['total_amount'] # Fallback to total amount
+        
+        order['financials'] = {
+            'total_fees': total_fees,
+            'order_income': order_income,
+            'commission_fee': commission,
+            'service_fee': service,
+            'seller_transaction_fee': transaction,
+            'buyer_paid_shipping': escrow_info.get('buyer_paid_shipping_fee', 0), # Potentially available
+            'shopee_shipping_rebate': escrow_info.get('shopee_shipping_rebate', 0),
+            'actual_shipping_fee': escrow_info.get('actual_shipping_fee', 0)
+        }
+        
         # Fetch order items with costs
         c.execute("""
-            SELECT item_id, item_name, model_name, model_quantity_purchased, 
+            SELECT item_id, item_name, model_id, model_name, model_sku, model_quantity_purchased, 
                    model_discounted_price, image_info, purchase_cost, domestic_shipping_cost
             FROM order_items 
             WHERE order_sn = ?
@@ -511,7 +636,9 @@ def get_orders(
             items_from_db.append({
                 'item_id': item_row['item_id'],
                 'item_name': item_row['item_name'],
+                'model_id': item_row['model_id'],
                 'model_name': item_row['model_name'],
+                'model_sku': item_row['model_sku'],
                 'model_quantity_purchased': item_row['model_quantity_purchased'],
                 'model_discounted_price': item_row['model_discounted_price'],
                 'image_info': json.loads(item_row['image_info']) if item_row['image_info'] else None,
@@ -565,7 +692,8 @@ def fetch_order_list_from_api(shop_id, time_from, time_to):
             }
             
             try:
-                resp = requests.get(url, params=params)
+                # 使用带重试机制的session，并设置30秒超时
+                resp = api_session.get(url, params=params, timeout=30)
                 data = resp.json()
                 if "error" in data and data["error"]:
                     msg = data.get("message", "Unknown error")
@@ -588,7 +716,7 @@ def fetch_order_list_from_api(shop_id, time_from, time_to):
                 print(f"Error fetching order list segment: {e}")
                 break
         
-        current_from += MAX_RANGE + 1 # Advance to next segment
+        current_from = current_to  # 移动到下一个时间段（无缝连接，避免遗漏订单）
 
     return all_order_sns
 
@@ -639,6 +767,47 @@ def sync_orders(req: SyncRequest):
     SYNC_TASKS[task_id] = {"task_id": task_id, "status": "starting", "current": 0, "total": 0, "count": 0}
     
     thread = threading.Thread(target=run_sync_task, args=(task_id, req.shop_id, req.time_from, req.time_to))
+    thread.start()
+    
+    return {"status": "accepted", "task_id": task_id}
+
+class BatchSyncItem(BaseModel):
+    order_sn: str
+    shop_id: int
+
+class BatchSyncRequest(BaseModel):
+    items: List[BatchSyncItem]
+
+def run_batch_sync_task(task_id, items):
+    total = len(items)
+    SYNC_TASKS[task_id] = {"task_id": task_id, "status": "running", "current": 0, "total": total, "count": 0}
+    
+    count = 0
+    conn = get_db_connection()
+    for i, item in enumerate(items):
+        try:
+            shop_id = item.shop_id
+            sn = item.order_sn
+            order_data = fetch_order_from_api(shop_id, sn)
+            if order_data:
+                escrow_data = fetch_escrow_detail(shop_id, sn)
+                save_order_to_db(conn, shop_id, order_data, escrow_data)
+                count += 1
+        except Exception as e:
+            print(f"Batch Sync Error for {item.order_sn}: {e}")
+        
+        SYNC_TASKS[task_id]["current"] = i + 1
+        SYNC_TASKS[task_id]["count"] = count
+        
+    conn.close()
+    SYNC_TASKS[task_id]["status"] = "completed"
+
+@app.post("/api/sync_batch")
+def sync_batch(req: BatchSyncRequest):
+    task_id = str(uuid.uuid4())
+    SYNC_TASKS[task_id] = {"task_id": task_id, "status": "starting", "current": 0, "total": 0, "count": 0}
+    
+    thread = threading.Thread(target=run_batch_sync_task, args=(task_id, req.items))
     thread.start()
     
     return {"status": "accepted", "task_id": task_id}
@@ -694,6 +863,71 @@ def get_shops_endpoint():
         "shops": formatted_shops,
         "sites": formatted_sites
     }
+
+class MappingBase(BaseModel):
+    site_id: str
+    shop_id: str
+    item_id: int
+    sku_id: str | None = None
+    product_name: str
+    purchase_cost: float
+    domestic_shipping_cost: float
+
+class MappingCreate(MappingBase):
+    pass
+
+class Mapping(MappingBase):
+    id: int
+    created_at: int
+
+@app.post("/api/mappings/save")
+def save_mapping(mapping: MappingCreate):
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Upsert mapping
+    c.execute("""
+        INSERT INTO cost_mappings (
+            site_id, shop_id, item_id, sku_id, product_name, 
+            purchase_cost, domestic_shipping_cost, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(site_id, shop_id, item_id, sku_id) DO UPDATE SET
+            purchase_cost=excluded.purchase_cost,
+            domestic_shipping_cost=excluded.domestic_shipping_cost,
+            product_name=excluded.product_name,
+            created_at=excluded.created_at
+    """, (
+        mapping.site_id, mapping.shop_id, mapping.item_id, mapping.sku_id or "", mapping.product_name,
+        mapping.purchase_cost, mapping.domestic_shipping_cost, int(time.time())
+    ))
+    
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+@app.get("/api/mappings")
+def get_mappings():
+    conn = get_db_connection()
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM cost_mappings ORDER BY created_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    
+    mappings = []
+    for r in rows:
+        mappings.append({
+            "id": r["id"],
+            "siteId": r["site_id"],
+            "shopId": r["shop_id"],
+            "productId": str(r["item_id"]),
+            "productName": r["product_name"],
+            "sku": r["sku_id"],
+            "purchaseCost": r["purchase_cost"],
+            "domesticShippingCost": r["domestic_shipping_cost"],
+            "createdAt": r["created_at"]
+        })
+    return mappings
 
 if __name__ == "__main__":
     print("🚀 Server starting with LATEST FINANCIAL LOGIC (Merged Escrow + Tax)...")
