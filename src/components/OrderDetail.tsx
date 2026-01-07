@@ -1,7 +1,23 @@
 import { useState, useEffect } from 'react';
-import { Package, User, Clock, CreditCard, Printer, AlertCircle, ChevronDown, HelpCircle, FileText, Receipt } from 'lucide-react';
+import { Package, User, Clock, CreditCard, Printer, AlertCircle, ChevronDown, HelpCircle, FileText, Receipt, ArrowLeft, ExternalLink, Store } from 'lucide-react';
 
-export function OrderDetail({ orderSn }: { orderSn?: string }) {
+// Shopee 订单详情链接生成函数
+function getShopeeOrderDetailUrl(orderNumber: string, shopId?: string): string {
+  if (shopId) {
+    return `https://seller.shopee.cn/portal/sale/order/${orderNumber}?cnsc_shop_id=${shopId}`;
+  }
+  return `https://seller.shopee.cn/portal/sale/order/${orderNumber}`;
+}
+
+interface OrderDetailProps {
+  orderSn?: string;
+  shopId?: string;
+  shopRegion?: string;
+  shopName?: string;
+  onBack?: () => void;
+}
+
+export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: OrderDetailProps) {
   const [showFeeDetails, setShowFeeDetails] = useState(false);
   const [showServiceFeeDetails, setShowServiceFeeDetails] = useState(false);
   const [showRevenueDetails, setShowRevenueDetails] = useState(false);
@@ -282,21 +298,60 @@ export function OrderDetail({ orderSn }: { orderSn?: string }) {
   if (error) return <div className="p-10 text-center text-red-500">Error: {error}</div>;
   if (!order) return <div className="p-10 text-center">No Order Found</div>;
 
+  // 生成 Shopee 订单详情链接
+  const shopeeOrderUrl = getShopeeOrderDetailUrl(order.orderNo, shopId);
+
   return (
     <div className="max-w-7xl mx-auto p-6">
       {/* Header */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-4">
         <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-2xl mb-2">订单详情</h1>
-            <div className="flex items-center gap-4 text-gray-600">
-              <span>订单号: {order.orderNo}</span>
-              <span className={`px-3 py-1 rounded-full ${order.statusColor}`}>
-                {order.status}
-              </span>
+          <div className="flex items-center gap-4">
+            {/* 返回按钮 */}
+            {onBack && (
+              <button
+                onClick={onBack}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                aria-label="返回"
+              >
+                <ArrowLeft className="w-5 h-5 text-gray-600" />
+              </button>
+            )}
+            <div>
+              <h1 className="text-2xl mb-2">订单详情</h1>
+              <div className="flex items-center gap-4 text-gray-600">
+                <span>订单号: {order.orderNo}</span>
+                <span className={`px-3 py-1 rounded-full ${order.statusColor}`}>
+                  {order.status}
+                </span>
+              </div>
             </div>
           </div>
 
+          {/* 店铺信息和 Shopee 链接 */}
+          <div className="flex items-center gap-3">
+            {/* 店铺信息 */}
+            {shopName && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg">
+                <Store className="w-4 h-4 text-gray-500" />
+                <span className="text-sm text-gray-700">{shopName}</span>
+                {shopRegion && (
+                  <span className="text-xs text-gray-400 bg-gray-200 px-1.5 py-0.5 rounded">{shopRegion}</span>
+                )}
+              </div>
+            )}
+
+            {/* Shopee 卖家中心链接 */}
+            <a
+              href={shopeeOrderUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium"
+            >
+              <ExternalLink className="w-4 h-4" />
+              在 Shopee 查看
+            </a>
+          </div>
         </div>
 
         {/* Time info */}
@@ -399,259 +454,243 @@ export function OrderDetail({ orderSn }: { orderSn?: string }) {
                 ))}
               </div>
 
-              {/* Payment Summary - Inside Items Box */}
               <div className="mt-6 pt-4 border-t">
+                <div className="w-full md:w-[480px] ml-auto space-y-2">
 
+                  {/* 总成本 - 展开控制 */}
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-1 cursor-pointer" onClick={() => setShowCostDetails(!showCostDetails)}>
+                      <span className="text-gray-700 font-medium">总成本</span>
+                      <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${showCostDetails ? 'rotate-180' : ''}`} />
+                    </div>
+                    <div className="flex items-center">
+                      <span className="text-gray-900 mr-1">-¥</span>
+                      {isEditingTotal ? (
+                        <input
+                          type="text"
+                          autoFocus
+                          className="w-24 text-right border-b border-orange-500 focus:outline-none bg-transparent font-medium text-gray-900"
+                          value={totalCostTemp}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setTotalCostTemp(e.target.value)}
+                          onBlur={() => {
+                            let finalTotal: string | null = null;
+                            if (totalCostTemp === '') {
+                              setTotalCostOverride(null);
+                            } else if (/^\d*\.?\d*$/.test(totalCostTemp)) {
+                              finalTotal = parseFloat(totalCostTemp).toFixed(2);
+                              setTotalCostOverride(finalTotal);
+                            }
 
-                {/* 总成本 - 展开控制 */}
-                <div className="flex justify-end items-start gap-4 mb-2">
-                  <div className="flex items-center gap-1">
-                    <span className="text-gray-700">总成本</span>
+                            handleSaveCosts({ totalChoice: finalTotal });
+                            setIsEditingTotal(false);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.currentTarget.blur();
+                            }
+                          }}
+                        />
+                      ) : (
+                        <span
+                          className="text-gray-900 cursor-pointer border-b border-transparent hover:border-gray-300 min-w-[60px] text-right"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setTotalCostTemp(calculateTotalCost().toFixed(2));
+                            setIsEditingTotal(true);
+                          }}
+                        >
+                          {calculateTotalCost().toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 成本明细 */}
+                  {showCostDetails && (
+                    <div className="bg-gray-50 rounded-md p-3 space-y-2 text-sm">
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600">采购总金额</span>
+                        <div className="flex items-center">
+                          <span className={`text-sm mr-1 ${purchaseTotalOverride !== null ? 'text-orange-600' : 'text-gray-400'}`}>¥</span>
+                          <input
+                            type="text"
+                            value={(() => {
+                              const val = purchaseTotalOverride !== null ? purchaseTotalOverride : calculateItemsPurchaseSum().toFixed(2);
+                              return parseFloat(val) === 0 ? '' : val;
+                            })()}
+                            onChange={(e) => handlePurchaseTotalChange(e.target.value)}
+                            onBlur={() => handleSaveCosts()}
+                            className={`w-20 text-right border-b border-gray-300 focus:border-orange-500 focus:outline-none bg-transparent ${purchaseTotalOverride !== null ? 'text-orange-600 font-medium' : 'text-gray-600'}`}
+                            placeholder="0.00"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600">国内物流成本</span>
+                        <div className="flex items-center">
+                          <span className="text-gray-400 mr-1 text-sm">¥</span>
+                          <input
+                            type="text"
+                            value={parseFloat(domesticLogisticsCost || '0') === 0 ? '' : domesticLogisticsCost}
+                            onChange={(e) => handleDomesticLogisticsCostChange(e.target.value)}
+                            onBlur={() => handleSaveCosts()}
+                            className="w-20 text-right border-b border-gray-300 focus:border-orange-500 focus:outline-none text-gray-600 bg-transparent"
+                            placeholder="0.00"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 预估利润 - 始终显示 */}
+                  <div className="flex justify-between items-start py-3 border-t border-dashed">
+                    <div className="flex flex-col">
+                      <span className="text-green-700 font-medium">预估利润</span>
+                      <div className="flex items-center gap-1 mt-1 bg-gray-50 px-2 py-1 rounded">
+                        <span className="text-xs text-gray-500">汇率:</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={order.exchangeRate}
+                          onChange={(e) => handleExchangeRateChange(e.target.value)}
+                          className="w-12 text-xs bg-transparent text-right border-b border-gray-300 focus:outline-none focus:border-orange-500 text-gray-600"
+                        />
+                        <span className="text-xs text-gray-500">{order.currency}</span>
+                      </div>
+                    </div>
+                    <span className="text-green-600 text-xl font-bold">
+                      ¥{calculateEstimatedProfit().toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-end mb-4">
                     <button
-                      onClick={() => setShowCostDetails(!showCostDetails)}
-                      className="text-gray-400 hover:text-gray-600"
+                      onClick={() => setShowRevenueDetails(!showRevenueDetails)}
+                      className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"
                     >
-                      <ChevronDown className={`w-4 h-4 transition-transform ${showCostDetails ? 'rotate-180' : ''}`} />
+                      {showRevenueDetails ? '隐藏收入进账详情' : '查看收入进账详情'}
+                      <ChevronDown className={`w-3 h-3 transition-transform ${showRevenueDetails ? 'rotate-180' : ''}`} />
                     </button>
                   </div>
-                  <div className="flex items-center w-24 justify-end">
-                    <span className="text-gray-900 mr-1">-¥</span>
-                    {isEditingTotal ? (
-                      <input
-                        type="text"
-                        autoFocus
-                        className="w-16 text-right border-b border-orange-500 focus:outline-none bg-transparent font-medium text-gray-900"
-                        value={totalCostTemp}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => setTotalCostTemp(e.target.value)}
-                        onBlur={() => {
-                          let finalTotal: string | null = null;
-                          if (totalCostTemp === '') {
-                            setTotalCostOverride(null);
-                          } else if (/^\d*\.?\d*$/.test(totalCostTemp)) {
-                            finalTotal = parseFloat(totalCostTemp).toFixed(2);
-                            setTotalCostOverride(finalTotal);
-                          }
 
-                          handleSaveCosts({ totalChoice: finalTotal });
-                          setIsEditingTotal(false);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.currentTarget.blur();
-                          }
-                        }}
-                      />
-                    ) : (
-                      <span
-                        className="text-gray-900 cursor-pointer border-b border-transparent hover:border-gray-300"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setTotalCostTemp(calculateTotalCost().toFixed(2));
-                          setIsEditingTotal(true);
-                        }}
-                      >
-                        {calculateTotalCost().toFixed(2)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* 成本明细 - 显示控制由独立状态管理 */}
-                {showCostDetails && (
-                  <div className="mb-4">
-                    <div className="flex justify-end items-center gap-4 mt-2">
-                      <span className="text-gray-600">采购总金额</span>
-                      <div className="flex items-center w-24 justify-end">
-                        <span className={`text-sm mr-1 ${purchaseTotalOverride !== null ? 'text-orange-600' : 'text-gray-400'}`}>¥</span>
-                        <input
-                          type="text"
-                          value={(() => {
-                            const val = purchaseTotalOverride !== null ? purchaseTotalOverride : calculateItemsPurchaseSum().toFixed(2);
-                            return parseFloat(val) === 0 ? '' : val;
-                          })()}
-                          onChange={(e) => handlePurchaseTotalChange(e.target.value)}
-                          onBlur={() => handleSaveCosts()}
-                          className={`w-16 text-right border-b border-gray-300 focus:border-orange-500 focus:outline-none bg-transparent ${purchaseTotalOverride !== null ? 'text-orange-600 font-medium' : 'text-gray-600'}`}
-                          placeholder="0.00"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex justify-end items-center gap-4 mt-2">
-                      <span className="text-gray-600">国内物流成本</span>
-                      <div className="flex items-center w-24 justify-end">
-                        <span className="text-gray-400 mr-1 text-sm">¥</span>
-                        <input
-                          type="text"
-                          value={parseFloat(domesticLogisticsCost || '0') === 0 ? '' : domesticLogisticsCost}
-                          onChange={(e) => handleDomesticLogisticsCostChange(e.target.value)}
-                          onBlur={() => handleSaveCosts()}
-                          className="w-16 text-right border-b border-gray-300 focus:border-orange-500 focus:outline-none text-gray-600 bg-transparent"
-                          placeholder="0.00"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* 预估利润 - 始终显示 */}
-                <div className="flex justify-end items-start gap-4 mb-4 pt-2 border-t">
-                  <div className="flex flex-col items-end">
-                    <span className="text-green-700 font-medium">预估利润</span>
-                    <div className="flex items-center gap-1 mt-1">
-                      <span className="text-xs text-gray-500">汇率:</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={order.exchangeRate}
-                        onChange={(e) => handleExchangeRateChange(e.target.value)}
-                        className="w-16 h-6 text-xs text-right border rounded px-1 focus:outline-none focus:border-orange-500 text-gray-600"
-                      />
-                      <span className="text-xs text-gray-500">{order.currency}</span>
-                    </div>
-                  </div>
-                  <span className="text-green-600 text-lg w-24 text-right">
-                    ¥{calculateEstimatedProfit().toFixed(2)}
-                  </span>
-                </div>
-
-                <div className="flex justify-end mb-2">
-                  <button
-                    onClick={() => setShowRevenueDetails(!showRevenueDetails)}
-                    className="text-sm text-gray-600 hover:text-gray-900"
-                  >
-                    {showRevenueDetails ? '隐藏收入进账详情 ▲' : '查看进账详情 ▼'}
-                  </button>
-                </div>
-
-                <div className="space-y-2 text-sm">
-                  {/* 商品总额 */}
-                  {/* 商品总额 */}
-                  <div className="flex justify-end items-start gap-4">
-                    <span className="text-gray-700">商品总额</span>
-                    <span className="w-24 text-right">R${order.payment.itemTotal.toFixed(2)}</span>
-                  </div>
-
-                  {/* 商品价格 - 只在展开时显示 */}
                   {showRevenueDetails && (
-                    <div className="flex justify-end items-start gap-4 mt-1">
-                      <span className="text-gray-600">商品价格</span>
-                      <span className="text-gray-600 w-24 text-right">R${order.payment.itemPrice.toFixed(2)}</span>
-                    </div>
+                    <table className="w-fit ml-auto text-sm border-separate border-spacing-y-2">
+                      <tbody>
+                        {/* 商品总额 */}
+                        <tr>
+                          <td className="text-right pr-6 text-gray-600 align-middle">商品总额</td>
+                          <td className="text-right text-gray-900 font-medium whitespace-nowrap align-middle">R${order.payment.itemTotal.toFixed(2)}</td>
+                        </tr>
+
+                        {/* 商品价格 */}
+                        <tr>
+                          <td className="text-right pr-6 text-gray-400 text-xs text-gray-300 align-middle">商品价格</td>
+                          <td className="text-right text-gray-400 text-xs text-gray-300 whitespace-nowrap align-middle">R${order.payment.itemPrice.toFixed(2)}</td>
+                        </tr>
+
+                        {/* 预估运费总额 */}
+                        <tr className="cursor-pointer group" onClick={() => setShowShippingDetails(!showShippingDetails)}>
+                          <td className="text-right pr-6 align-middle">
+                            <div className="flex items-center justify-end gap-1 text-gray-900 group-hover:text-gray-700">
+                              <span>预估运费总额</span>
+                              <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${showShippingDetails ? 'rotate-180' : ''}`} />
+                            </div>
+                          </td>
+                          <td className="text-right text-gray-900 font-medium whitespace-nowrap align-middle">
+                            {order.payment.estimatedShipping < 0 ? '-' : ''}R${Math.abs(order.payment.estimatedShipping).toFixed(2)}
+                          </td>
+                        </tr>
+
+                        {/* 运费明细 */}
+                        {showShippingDetails && (
+                          <>
+                            <tr>
+                              <td className="text-right pr-6 text-gray-400 text-xs align-middle">买家支付运费</td>
+                              <td className="text-right text-gray-400 text-xs whitespace-nowrap align-middle">R${order.payment.buyerPaidShipping.toFixed(2)}</td>
+                            </tr>
+                            <tr>
+                              <td className="text-right pr-6 text-gray-400 text-xs align-middle">物流业者收取的预估运费</td>
+                              <td className="text-right text-gray-400 text-xs whitespace-nowrap align-middle">-R${Math.abs(order.payment.logisticsProviderFee).toFixed(2)}</td>
+                            </tr>
+                            <tr>
+                              <td className="text-right pr-6 text-gray-400 text-xs align-middle">Shopee预估运费回扣</td>
+                              <td className="text-right text-gray-400 text-xs whitespace-nowrap align-middle">R${order.payment.shopeeShippingRebate.toFixed(2)}</td>
+                            </tr>
+                          </>
+                        )}
+
+                        {/* 费用 */}
+                        <tr className="cursor-pointer group" onClick={() => setShowFeeDetails(!showFeeDetails)}>
+                          <td className="text-right pr-6 pt-2 align-middle">
+                            <div className="flex items-center justify-end gap-1 text-gray-900 group-hover:text-gray-700">
+                              <span>费用</span>
+                              <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${showFeeDetails ? 'rotate-180' : ''}`} />
+                            </div>
+                          </td>
+                          <td className="text-right text-gray-900 font-medium whitespace-nowrap pt-2 align-middle">
+                            -R${Math.abs(order.payment.totalFees).toFixed(2)}
+                          </td>
+                        </tr>
+
+                        {/* 费用明细 */}
+                        {showFeeDetails && (
+                          <>
+                            <tr>
+                              <td className="text-right pr-6 align-middle">
+                                <div className="flex items-center justify-end gap-1 text-gray-400 text-xs">
+                                  <span className={order.payment.commission > 0 ? "text-gray-400" : "text-gray-300"}>佣金</span>
+                                  <HelpCircle className="w-3 h-3 text-gray-300" />
+                                </div>
+                              </td>
+                              <td className="text-right text-gray-400 text-xs whitespace-nowrap align-middle">-R${Math.abs(order.payment.commission).toFixed(2)}</td>
+                            </tr>
+
+                            <tr className="cursor-pointer group" onClick={() => setShowServiceFeeDetails(!showServiceFeeDetails)}>
+                              <td className="text-right pr-6 align-middle">
+                                <div className="flex items-center justify-end gap-1 text-gray-400 text-xs group-hover:text-gray-500">
+                                  <span>服务费</span>
+                                  <ChevronDown className={`w-3 h-3 text-gray-300 transition-transform ${showServiceFeeDetails ? 'rotate-180' : ''}`} />
+                                </div>
+                              </td>
+                              <td className="text-right text-gray-400 text-xs whitespace-nowrap align-middle">-R${Math.abs(order.payment.serviceFee).toFixed(2)}</td>
+                            </tr>
+
+                            <tr>
+                              <td className="text-right pr-6 align-middle">
+                                <div className="flex items-center justify-end gap-1 text-gray-400 text-xs">
+                                  <span>交易手续费</span>
+                                  <HelpCircle className="w-3 h-3 text-gray-300" />
+                                </div>
+                              </td>
+                              <td className="text-right text-gray-400 text-xs whitespace-nowrap align-middle">-R${Math.abs(order.payment.transactionFee).toFixed(2)}</td>
+                            </tr>
+                          </>
+                        )}
+                      </tbody>
+
+                      {/* 预估订单收入 - 作为 tfoot 或者最后的 tr */}
+                      <tfoot>
+                        <tr>
+                          <td colSpan={2} className="pt-4 border-t border-dashed"></td>
+                        </tr>
+                        <tr>
+                          <td className="text-right pr-6 text-gray-600 align-middle">预估订单收入</td>
+                          <td className="text-right text-orange-600 font-bold text-xl whitespace-nowrap align-middle">
+                            R${order.payment.estimatedRevenue.toFixed(2)}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
                   )}
 
-                  {/* 预估运费总额 */}
-                  <div className="flex justify-end items-start gap-4 mt-1">
-                    <div className="flex items-center gap-1">
-                      <span className="text-gray-700">预估运费总额</span>
-                      <button
-                        onClick={() => setShowShippingDetails(!showShippingDetails)}
-                        className="text-gray-400 hover:text-gray-600"
-                      >
-                        <ChevronDown className={`w-4 h-4 transition-transform ${showShippingDetails ? 'rotate-180' : ''}`} />
-                      </button>
+                  {!showRevenueDetails && (
+                    <div className="flex justify-end gap-8 pt-2 text-sm text-gray-500">
+                      <span>预估订单收入 (隐藏详情)</span>
+                      <span>R${order.payment.estimatedRevenue.toFixed(2)}</span>
                     </div>
-                    <span className="w-24 text-right">
-                      {order.payment.estimatedShipping < 0 ? '-' : ''}R${Math.abs(order.payment.estimatedShipping).toFixed(2)}
-                    </span>
-                  </div>
-
-                  {showShippingDetails && (
-                    <>
-                      {/* 买家支付运费 */}
-                      <div className="flex justify-end items-start gap-4 mt-1">
-                        <span className="text-gray-600">买家支付运费</span>
-                        <span className="text-gray-600 w-24 text-right">R${order.payment.buyerPaidShipping.toFixed(2)}</span>
-                      </div>
-
-                      {/* 物流业者收取的预估运费 */}
-                      <div className="flex justify-end items-start gap-4 mt-1">
-                        <span className="text-gray-600">物流业者收取的预估运费</span>
-                        <span className="text-gray-600 w-24 text-right">
-                          -R${Math.abs(order.payment.logisticsProviderFee).toFixed(2)}
-                        </span>
-                      </div>
-
-                      {/* Shopee预估运费回扣 */}
-                      <div className="flex justify-end items-start gap-4 mt-1">
-                        <span className="text-gray-600">Shopee预估运费回扣</span>
-                        <span className="text-gray-600 w-24 text-right">
-                          R${order.payment.shopeeShippingRebate.toFixed(2)}
-                        </span>
-                      </div>
-                    </>
                   )}
-
-                  {/* 费用 */}
-                  <div className="flex justify-end items-start gap-4">
-                    <div className="flex items-center gap-1">
-                      <span className="text-gray-700">费用</span>
-                      <button
-                        onClick={() => setShowFeeDetails(!showFeeDetails)}
-                        className="text-gray-400 hover:text-gray-600"
-                      >
-                        <ChevronDown className={`w-4 h-4 transition-transform ${showFeeDetails ? 'rotate-180' : ''}`} />
-                      </button>
-                    </div>
-                    <span className="text-gray-900 w-24 text-right">
-                      -R${Math.abs(order.payment.totalFees).toFixed(2)}
-                    </span>
-                  </div>
-
-                  {/* 费用明细 - 只在展开时显示 */}
-                  {showFeeDetails && (
-                    <>
-                      <div className="flex justify-end items-start gap-4 mt-1">
-                        <div className="flex items-center gap-1">
-                          <span className="text-gray-600">佣金</span>
-                          <button className="text-gray-400 hover:text-gray-600">
-                            <HelpCircle className="w-3 h-3" />
-                          </button>
-                        </div>
-                        <span className="text-gray-600 w-24 text-right">
-                          -R${Math.abs(order.payment.commission).toFixed(2)}
-                        </span>
-                      </div>
-
-                      <div className="flex justify-end items-start gap-4 mt-1">
-                        <div className="flex items-center gap-1">
-                          <span className="text-gray-600">服务费</span>
-                          <button
-                            onClick={() => setShowServiceFeeDetails(!showServiceFeeDetails)}
-                            className="text-gray-400 hover:text-gray-600"
-                          >
-                            <ChevronDown className={`w-4 h-4 transition-transform ${showServiceFeeDetails ? 'rotate-180' : ''}`} />
-                          </button>
-                        </div>
-                        <span className="text-gray-600 w-24 text-right">
-                          -R${Math.abs(order.payment.serviceFee).toFixed(2)}
-                        </span>
-                      </div>
-
-                      <div className="flex justify-end items-start gap-4 mt-1">
-                        <div className="flex items-center gap-1">
-                          <span className="text-gray-600">交易手续费</span>
-                          <button className="text-gray-400 hover:text-gray-600">
-                            <HelpCircle className="w-3 h-3" />
-                          </button>
-                        </div>
-                        <span className="text-gray-600 w-24 text-right">
-                          -R${Math.abs(order.payment.transactionFee).toFixed(2)}
-                        </span>
-                      </div>
-                    </>
-                  )}
-
-                  {/* 预估订单收入 - 突出显示 */}
-                  <div className="flex justify-end items-start gap-4 pt-3 border-t">
-                    <span>预估订单收入</span>
-                    <span className="text-orange-600 text-lg w-24 text-right">
-                      R${order.payment.estimatedRevenue.toFixed(2)}
-                    </span>
-                  </div>
-
-
                 </div>
               </div>
             </div>
@@ -673,62 +712,57 @@ export function OrderDetail({ orderSn }: { orderSn?: string }) {
 
             {/* Buyer Payment Amount */}
             <div className="border rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-3 cursor-pointer select-none" onClick={() => setShowBuyerPaymentDetails(!showBuyerPaymentDetails)}>
                 <Receipt className="w-5 h-5 text-gray-600" />
-                <span className="text-gray-700">买家实付金额</span>
-                <span className="ml-auto mr-2 text-gray-700">
+                <span className="text-gray-700 font-medium">买家实付金额</span>
+                <span className="ml-auto mr-2 text-gray-900 font-medium">
                   R${order.buyerPayment.totalPaid.toFixed(2)}
                 </span>
-                <button
-                  onClick={() => setShowBuyerPaymentDetails(!showBuyerPaymentDetails)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <ChevronDown className={`w-4 h-4 transition-transform ${showBuyerPaymentDetails ? 'rotate-180' : ''}`} />
-                </button>
+                <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${showBuyerPaymentDetails ? 'rotate-180' : ''}`} />
               </div>
 
               {showBuyerPaymentDetails && (
-                <div className="space-y-2 text-sm pl-7">
-                  <div className="flex justify-end items-start gap-4">
+                <div className="mt-3 pt-3 border-t space-y-2 text-sm pl-7 pr-2 bg-gray-50 rounded-md py-3 mb-2">
+                  <div className="flex justify-between items-center">
                     <span className="text-gray-600">商品总额</span>
-                    <span className="text-gray-600 w-24 text-right">R${order.buyerPayment.itemTotal.toFixed(2)}</span>
+                    <span className="text-gray-900">R${order.buyerPayment.itemTotal.toFixed(2)}</span>
                   </div>
 
-                  <div className="flex justify-end items-start gap-4">
+                  <div className="flex justify-between items-center">
                     <span className="text-gray-600">运费</span>
-                    <span className="text-gray-600 w-24 text-right">R${order.buyerPayment.shipping.toFixed(2)}</span>
+                    <span className="text-gray-900">R${order.buyerPayment.shipping.toFixed(2)}</span>
                   </div>
 
-                  <div className="flex justify-end items-start gap-4">
+                  <div className="flex justify-between items-center">
                     <span className="text-gray-600">Shopee Voucher</span>
-                    <span className="text-gray-600 w-24 text-right">R${order.buyerPayment.shopeeVoucher.toFixed(2)}</span>
+                    <span className="text-gray-900">R${order.buyerPayment.shopeeVoucher.toFixed(2)}</span>
                   </div>
 
-                  <div className="flex justify-end items-start gap-4">
+                  <div className="flex justify-between items-center">
                     <span className="text-gray-600">Seller Voucher</span>
-                    <span className="text-gray-600 w-24 text-right">R${order.buyerPayment.sellerVoucher.toFixed(2)}</span>
+                    <span className="text-gray-900">R${order.buyerPayment.sellerVoucher.toFixed(2)}</span>
                   </div>
 
-                  <div className="flex justify-end items-start gap-4">
+                  <div className="flex justify-between items-center">
                     <span className="text-gray-600">Shopee币折抵</span>
-                    <span className="text-gray-600 w-24 text-right">
+                    <span className="text-gray-900">
                       {order.buyerPayment.shopeeCoins > 0 ? '-' : ''}R${order.buyerPayment.shopeeCoins.toFixed(2)}
                     </span>
                   </div>
 
-                  <div className="flex justify-end items-start gap-4">
+                  <div className="flex justify-between items-center">
                     <span className="text-gray-600">ICMS</span>
-                    <span className="text-gray-600 w-24 text-right">R${order.buyerPayment.icms.toFixed(2)}</span>
+                    <span className="text-gray-900">R${order.buyerPayment.icms.toFixed(2)}</span>
                   </div>
 
-                  <div className="flex justify-end items-start gap-4">
+                  <div className="flex justify-between items-center">
                     <span className="text-gray-600">Import Tax</span>
-                    <span className="text-gray-600 w-24 text-right">R${order.buyerPayment.importTax.toFixed(2)}</span>
+                    <span className="text-gray-900">R${order.buyerPayment.importTax.toFixed(2)}</span>
                   </div>
 
-                  <div className="flex justify-end items-start gap-4 pt-2 border-t">
-                    <span className="text-gray-700">所有买家款项</span>
-                    <span className="text-gray-900 w-24 text-right">R${order.buyerPayment.totalPaid.toFixed(2)}</span>
+                  <div className="flex justify-between items-center pt-2 border-t mt-2 font-medium">
+                    <span className="text-gray-900">所有买家款项</span>
+                    <span className="text-gray-900">R${order.buyerPayment.totalPaid.toFixed(2)}</span>
                   </div>
                 </div>
               )}

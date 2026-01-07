@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Search, MessageCircle, ChevronRight } from 'lucide-react';
+import { Search, ChevronDown, RefreshCw, Store, Globe, Calculator, MoreHorizontal } from 'lucide-react';
 import { DateRangePicker } from './DateRangePicker';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Badge } from './ui/badge';
+import { Checkbox } from './ui/checkbox';
+import { cn } from './ui/utils';
 
 interface OrderSummary {
     order_sn: string;
@@ -9,40 +14,55 @@ interface OrderSummary {
     total_amount: number;
     currency: string;
     create_time: number;
-    item_list: any[]; // items from raw_data
+    item_list: Array<{
+        item_id: number;
+        item_name: string;
+        image_info?: { image_url: string };
+        model_name?: string;
+        model_quantity_purchased: number;
+        model_discounted_price?: number;
+        purchase_cost?: number;
+        domestic_shipping_cost?: number;
+    }>;
     shipping_carrier?: string;
-    shipping_carrier_shipping_method?: string; // Sometimes carrier is here
+    purchase_cost?: number;
+    domestic_shipping_cost?: number;
+    total_cost?: number;
+    escrow_info?: any;
 }
 
 interface OrderListProps {
     onSelectOrder: (orderSn: string) => void;
     onSync: (startDate: string, endDate: string) => void;
+    onSyncSelected: (orderSns: string[]) => void;
+    onMappingSaved?: () => void;
     syncing: boolean;
+    syncTask: any;
     refreshTrigger?: number;
 }
 
-export function OrderList({ onSelectOrder, onSync, syncing, refreshTrigger }: OrderListProps) {
+export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSaved, syncing, syncTask, refreshTrigger }: OrderListProps) {
     const [activeTab, setActiveTab] = useState('ALL');
     const [keyword, setKeyword] = useState('');
     const [orders, setOrders] = useState<OrderSummary[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
     const [loading, setLoading] = useState(false);
+    const [selectedSns, setSelectedSns] = useState<Set<string>>(new Set());
     const [startDate, setStartDate] = useState(() => {
         const d = new Date();
-        d.setDate(d.getDate() - 7); // 默认最近7天
+        d.setDate(d.getDate() - 7);
         return d.toISOString().split('T')[0];
     });
     const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
 
-    // Tab definition matching Shopee standard somewhat
     const tabs = [
-        { id: 'ALL', label: '全部' },
-        { id: 'UNPAID', label: '待付款' },
-        { id: 'READY_TO_SHIP', label: '待出货' },
-        { id: 'SHIPPED', label: '运送中' },
-        { id: 'COMPLETED', label: '已完成' },
-        { id: 'CANCELLED', label: '退货/退款/取消' },
+        { id: 'ALL', label: '全部', count: total },
+        { id: 'UNPAID', label: '待付款', count: 5 },
+        { id: 'READY_TO_SHIP', label: '待出货', count: 3 },
+        { id: 'SHIPPED', label: '运送中', count: 2 },
+        { id: 'COMPLETED', label: '已完成', count: 5 },
+        { id: 'CANCELLED', label: '退货/取消', count: 0 },
     ];
 
     const fetchOrders = async () => {
@@ -60,6 +80,7 @@ export function OrderList({ onSelectOrder, onSync, syncing, refreshTrigger }: Or
 
             setOrders(data.orders || []);
             setTotal(data.total || 0);
+            setSelectedSns(new Set());
         } catch (err) {
             console.error(err);
         } finally {
@@ -76,35 +97,66 @@ export function OrderList({ onSelectOrder, onSync, syncing, refreshTrigger }: Or
         fetchOrders();
     }
 
-    // Helper to format currency
-    const fmtMoney = (val: number, currency = 'BRL') => {
-        // Basic formatting
-        return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: currency }).format(val);
+    const toggleSelectAll = (checked: boolean) => {
+        if (checked) {
+            setSelectedSns(new Set(orders.map(o => o.order_sn)));
+        } else {
+            setSelectedSns(new Set());
+        }
     };
 
-    // Status mapping
-    const getStatusLabel = (status: string) => {
-        const map: { [key: string]: string } = {
-            'UNPAID': '待付款',
-            'READY_TO_SHIP': '待出货',
-            'PROCESSED': '已处理',
-            'RETRY_SHIP': '待出货',
-            'SHIPPED': '运送中',
-            'COMPLETED': '已完成',
-            'IN_CANCEL': '取消中',
-            'CANCELLED': '已取消',
-            'TO_RETURN': '退货/退款'
-        };
-        return map[status] || status;
+    const toggleSelect = (sn: string) => {
+        const next = new Set(selectedSns);
+        if (next.has(sn)) next.delete(sn);
+        else next.add(sn);
+        setSelectedSns(next);
     };
 
     return (
-        <div className="max-w-7xl mx-auto p-6 relative">
-            <div className="flex justify-between items-center mb-6">
-                <h1 className="text-2xl font-medium">我的订单</h1>
+        <div className="max-w-7xl mx-auto p-6 space-y-8 animate-in fade-in duration-500 ">
+            {/* Header Section */}
+            <div className="flex flex-col gap-6">
+                <div className="flex items-center justify-between">
+                    <h1 className="text-3xl font-black tracking-tight text-gray-900">我的订单</h1>
+                    <Button variant="outline" className="h-10 gap-2 bg-white border-gray-200 hover:bg-gray-50 shadow-sm transition-all rounded-xl px-5 border">
+                        <div className="w-4 h-4 rounded-full bg-orange-100 flex items-center justify-center">
+                            <div className="w-1.5 h-1.5 bg-orange-600 rounded-full" />
+                        </div>
+                        <span className="font-bold text-sm text-gray-700">成本映射管理</span>
+                    </Button>
+                </div>
 
-                {/* Sync Controls */}
-                <div className="flex items-center gap-3">
+                {/* Site & Shop Selectors - New Wide Row */}
+                <div className="flex gap-4">
+                    <Button variant="outline" className="flex-1 h-11 gap-2 bg-white border-gray-200 hover:bg-gray-50 shadow-sm transition-all rounded-xl justify-between px-4 border">
+                        <div className="flex items-center gap-3">
+                            <Globe className="w-5 h-5 text-blue-500" />
+                            <span className="font-bold text-gray-900">全部站点</span>
+                        </div>
+                        <ChevronDown className="w-4 h-4 text-gray-400" />
+                    </Button>
+                    <Button variant="outline" className="flex-1 h-11 gap-2 bg-white border-gray-200 hover:bg-gray-50 shadow-sm transition-all rounded-xl justify-between px-4 border">
+                        <div className="flex items-center gap-3">
+                            <Store className="w-5 h-5 text-orange-500" />
+                            <span className="font-bold text-gray-900">全部店铺</span>
+                        </div>
+                        <ChevronDown className="w-4 h-4 text-gray-400" />
+                    </Button>
+                </div>
+
+                {/* Filter Bar */}
+                <div className="flex gap-3 items-center">
+                    <div className="relative flex-1 group">
+                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 group-focus-within:text-orange-500 transition-colors" />
+                        <Input
+                            placeholder="搜索订单号 / 商品名称 / 订单状态"
+                            className="pl-11 h-11 bg-gray-100 border-transparent focus:bg-white focus:border-orange-500 transition-all rounded-2xl text-sm"
+                            value={keyword}
+                            onChange={e => setKeyword(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                        />
+                    </div>
+
                     <DateRangePicker
                         startDate={startDate}
                         endDate={endDate}
@@ -114,136 +166,372 @@ export function OrderList({ onSelectOrder, onSync, syncing, refreshTrigger }: Or
                         }}
                     />
 
-                    <button
-                        onClick={() => {
-                            console.log("Triggering sync with:", startDate, endDate);
-                            onSync(startDate, endDate);
-                        }}
+                    <Button
+                        onClick={() => selectedSns.size > 0 ? onSyncSelected(Array.from(selectedSns)) : onSync(startDate, endDate)}
                         disabled={syncing}
-                        className={`px-4 py-2 rounded text-sm font-medium transition-all shadow-sm h-[38px] ${syncing
-                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                            : 'bg-orange-500 text-white hover:bg-orange-600 active:scale-95'
-                            }`}
+                        className="h-11 px-8 bg-[#ff6900] hover:bg-[#ff8533] text-white rounded-2xl shadow-lg shadow-orange-500/20 active:scale-95 transition-all gap-2 font-bold"
                     >
-                        {syncing ? '正在同步...' : '同步订单'}
-                    </button>
+                        {syncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : null}
+                        {selectedSns.size > 0 ? `同步选中 (${selectedSns.size})` : '同步订单'}
+                    </Button>
                 </div>
             </div>
 
-            {/* Tabs */}
-            <div className="flex border-b mb-6 overflow-x-auto">
-                {tabs.map(tab => (
-                    <button
-                        key={tab.id}
-                        className={`px-6 py-3 text-sm font-medium whitespace-nowrap transition-colors relative ${activeTab === tab.id
-                            ? 'text-orange-500 border-b-2 border-orange-500'
-                            : 'text-gray-600 hover:text-orange-500'
-                            }`}
-                        onClick={() => { setActiveTab(tab.id); setPage(1); }}
-                    >
-                        {tab.label}
-                    </button>
-                ))}
-            </div>
-
-            {/* Search & Filters */}
-            <div className="bg-white p-4 rounded-lg shadow-sm mb-6 flex flex-wrap gap-4 items-center">
-                <div className="flex bg-gray-100 rounded-md overflow-hidden border focus-within:ring-1 focus-within:ring-orange-500">
-                    <div className="px-3 py-2 text-gray-500 bg-gray-50 border-r text-sm w-28 text-center flex items-center justify-between cursor-pointer">
-                        订单编号 <ChevronRight className="w-3 h-3 rotate-90" />
+            {/* Sync Progress Banner */}
+            {syncing && syncTask && (
+                <div className="bg-[#030213] text-white rounded-2xl p-5 shadow-2xl relative overflow-hidden group">
+                    <div className="absolute top-0 left-0 h-full bg-orange-500/10 transition-all duration-500"
+                        style={{ width: `${(syncTask.current / (syncTask.total || 1)) * 100}%` }} />
+                    <div className="relative flex items-center justify-between z-10">
+                        <div className="flex items-center gap-4">
+                            <div className="w-10 h-10 rounded-full bg-orange-500/20 flex items-center justify-center">
+                                <RefreshCw className="w-5 h-5 text-orange-500 animate-spin" />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-sm">正在同步订单数据...</h3>
+                                <p className="text-[11px] text-gray-400 mt-0.5">请勿关闭页面，系统正在更新您的订单及财务明细信息</p>
+                            </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                            <div className="text-[11px] font-black text-orange-500 bg-orange-500/10 px-2 py-0.5 rounded-md">
+                                {Math.round((syncTask.current / (syncTask.total || 1)) * 100)}%
+                            </div>
+                            <div className="text-[10px] text-gray-400 font-medium">
+                                已处理: <span className="text-white">{syncTask.current}</span> / {syncTask.total} (成功: {syncTask.count})
+                            </div>
+                        </div>
                     </div>
-                    <input
-                        type="text"
-                        className="px-4 py-2 bg-transparent focus:outline-none w-64 text-sm"
-                        placeholder="订单编号"
-                        value={keyword}
-                        onChange={e => setKeyword(e.target.value)}
-                        onKeyDown={e => e.key === 'Enter' && handleSearch()}
-                    />
-                    <button onClick={handleSearch} className="px-4 text-gray-400 hover:text-gray-600">
-                        <Search className="w-4 h-4" />
-                    </button>
+                </div>
+            )}
+
+            {/* Main Content Card */}
+            <div className="bg-white rounded-3xl shadow-2xl shadow-gray-200/50 border border-gray-100/50 p-8">
+                {/* Tabs */}
+                <div className="flex gap-3 mb-10 overflow-x-auto pb-2 scrollbar-none">
+                    {tabs.map(tab => (
+                        <button
+                            key={tab.id}
+                            className={cn(
+                                "flex items-center gap-2 px-6 py-3 rounded-2xl text-sm font-bold transition-all duration-300 whitespace-nowrap",
+                                activeTab === tab.id
+                                    ? "bg-[#030213] text-white shadow-xl shadow-black/20 translate-y-[-2px]"
+                                    : "text-gray-400 hover:text-gray-900 border border-transparent hover:bg-gray-50 hover:border-gray-100"
+                            )}
+                            onClick={() => { setActiveTab(tab.id); setPage(1); }}
+                        >
+                            <span className={cn(
+                                activeTab === tab.id ? "text-orange-500" : "text-gray-300"
+                            )}>{tab.label}</span>
+                            {tab.count > 0 && (
+                                <span className={cn(
+                                    "text-[10px] px-2 py-0.5 rounded-lg",
+                                    activeTab === tab.id ? "bg-white/20 text-white" : "bg-gray-100 text-gray-500"
+                                )}>
+                                    {tab.count}
+                                </span>
+                            )}
+                        </button>
+                    ))}
+                </div>
+
+                {/* List Header / Sort Section */}
+                <div className="flex items-center justify-between mb-8 pb-3 border-b border-gray-100/50">
+                    <div className="flex items-center gap-6">
+                        <div className="flex items-center gap-3">
+                            <Checkbox
+                                id="all-check"
+                                checked={orders.length > 0 && selectedSns.size === orders.length}
+                                onCheckedChange={(checked) => toggleSelectAll(!!checked)}
+                                className="w-5 h-5 rounded-md"
+                            />
+                            <label htmlFor="all-check" className="text-sm font-bold text-gray-900 cursor-pointer select-none">全选</label>
+                        </div>
+                        <div className="h-4 w-px bg-gray-200" />
+                        <div className="text-sm font-black text-gray-900 flex items-center gap-2">
+                            {orders.length} <span className="text-gray-400 font-bold">订单</span>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                        <span className="text-xs text-gray-400 font-black uppercase tracking-wider">排序方式:</span>
+                        <div className="flex bg-gray-50 p-1.5 rounded-xl gap-2">
+                            {['创建时间', '商品总额', '预估运费', '费用', '预估订单收入'].map(sort => (
+                                <Button key={sort} variant="ghost" size="sm" className={cn(
+                                    "h-8 text-[11px] font-black px-4 rounded-lg transition-all",
+                                    sort === '创建时间' ? "bg-white text-gray-900 shadow-sm" : "text-gray-400 hover:bg-white hover:text-gray-900"
+                                )}>
+                                    {sort}
+                                </Button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Orders List */}
+                <div className="space-y-8">
+                    {loading ? (
+                        <div className="flex flex-col items-center justify-center py-32 gap-6">
+                            <div className="w-16 h-16 rounded-full border-4 border-gray-100 border-t-orange-500 animate-spin" />
+                            <p className="text-lg font-black text-gray-300 animate-pulse uppercase tracking-widest">Loading Data</p>
+                        </div>
+                    ) : (
+                        orders.map(order => (
+                            <OrderCard
+                                key={order.order_sn}
+                                order={order}
+                                onSelect={() => onSelectOrder(order.order_sn)}
+                                selected={selectedSns.has(order.order_sn)}
+                                onToggleSelect={() => toggleSelect(order.order_sn)}
+                                onMappingSaved={onMappingSaved}
+                            />
+                        ))
+                    )}
+                </div>
+
+                {/* Simplified Pagination */}
+                <div className="flex items-center justify-between mt-12 pt-8 border-t border-gray-50">
+                    <p className="text-xs text-gray-400 font-bold">显示 {orders.length} 个结果，共 {total} 个</p>
+                    <div className="flex gap-3">
+                        <Button
+                            variant="outline"
+                            disabled={page === 1}
+                            onClick={() => setPage(p => p - 1)}
+                            className="rounded-xl h-10 px-6 font-bold"
+                        >
+                            Prev
+                        </Button>
+                        <Button
+                            variant="outline"
+                            disabled={orders.length < 20}
+                            onClick={() => setPage(p => p + 1)}
+                            className="rounded-xl h-10 px-6 font-bold"
+                        >
+                            Next
+                        </Button>
+                    </div>
                 </div>
             </div>
+        </div>
+    );
+}
 
-            {/* Count */}
-            <div className="text-xl font-medium mb-4 text-gray-800">{total} 订单</div>
+function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved }: {
+    order: OrderSummary,
+    onSelect: () => void,
+    selected: boolean,
+    onToggleSelect: () => void,
+    onMappingSaved?: () => void
+}) {
+    const [itemCosts, setItemCosts] = useState<{ [key: string]: { purchase: number, shipping: number } }>(
+        (order.item_list || []).reduce((acc, item, idx) => ({
+            ...acc,
+            [`${item.item_id}-${idx}`]: {
+                purchase: item.purchase_cost || 0,
+                shipping: item.domestic_shipping_cost || 0
+            }
+        }), {})
+    );
+    const [saving, setSaving] = useState(false);
 
-            {/* List Header */}
-            <div className="bg-gray-100 p-3 rounded-t-lg grid grid-cols-12 gap-4 text-sm text-gray-500 font-medium">
-                <div className="col-span-12 pl-2">商品</div>
+    const handleUpdateCost = async (itemId: number, modelName: string, idx: number, type: 'purchase' | 'shipping', val: string) => {
+        const num = parseFloat(val) || 0;
+        const key = `${itemId}-${idx}`;
+        const nextCosts = { ...itemCosts, [key]: { ...itemCosts[key], [type]: num } };
+        setItemCosts(nextCosts);
+
+        // Auto-save on blur
+        setSaving(true);
+        try {
+            await fetch(`http://localhost:8000/api/order/${order.order_sn}/item/cost`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    item_id: itemId,
+                    model_name: modelName,
+                    purchase_cost: nextCosts[key].purchase,
+                    domestic_shipping_cost: nextCosts[key].shipping
+                })
+            });
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleSaveToMapping = async (itemId: number, modelName: string, idx: number) => {
+        const key = `${itemId}-${idx}`;
+        const cost = itemCosts[key];
+        setSaving(true);
+        try {
+            await fetch(`http://localhost:8000/api/mappings/save`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    item_id: itemId,
+                    model_name: modelName || "",
+                    purchase_cost: cost.purchase,
+                    domestic_shipping_cost: cost.shipping
+                })
+            });
+            // Show notification logic?
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const statusInfo = {
+        'UNPAID': { label: '待付款', color: 'bg-orange-100 text-orange-600' },
+        'READY_TO_SHIP': { label: '待出货', color: 'bg-blue-100 text-blue-600' },
+        'SHIPPED': { label: '运送中', color: 'bg-purple-100 text-purple-600' },
+        'COMPLETED': { label: '已完成', color: 'bg-green-100 text-green-600' },
+        'CANCELLED': { label: '已取消', color: 'bg-red-100 text-red-600' },
+        'TO_RETURN': { label: '退货/退款', color: 'bg-red-50 text-red-500' }
+    }[order.order_status] || { label: order.order_status, color: 'bg-gray-100 text-gray-600' };
+
+    const escrow = order.escrow_info || {};
+    const financials = {
+        itemTotal: escrow.original_price || order.total_amount,
+        shipping: (escrow.estimated_shipping_fee || 0) + (escrow.shopee_shipping_rebate || 0),
+        fees: (escrow.commission_fee || 0) + (escrow.service_fee || 0) + (escrow.seller_transaction_fee || 0),
+        estimatedRevenue: escrow.order_income_amount || order.total_amount,
+        totalPaid: escrow.buyer_total_amount || order.total_amount
+    };
+
+    const orderTotalCost = Object.values(itemCosts).reduce((sum, cost, idx) => {
+        const qty = order.item_list[idx]?.model_quantity_purchased || 0;
+        return sum + (cost.purchase * qty) + cost.shipping;
+    }, 0);
+
+    return (
+        <div className={cn(
+            "group border-2 rounded-[2rem] overflow-hidden transition-all duration-400",
+            selected ? "border-orange-500 bg-orange-50/10 shadow-2xl shadow-orange-500/10" : "border-gray-50 hover:border-gray-200"
+        )}>
+            {/* Header */}
+            <div className="bg-gray-50/50 px-8 py-4 flex items-center justify-between border-b border-gray-100/50 group-hover:bg-white transition-colors">
+                <div className="flex items-center gap-6">
+                    <Checkbox checked={selected} onCheckedChange={() => onToggleSelect()} className="w-5 h-5 rounded-md" />
+                    <div className="text-sm font-bold text-gray-400">
+                        订单号: <span className="text-gray-900 ml-2 font-mono">{order.order_sn}</span>
+                    </div>
+                    <Badge variant="outline" className={cn("px-3 py-0.5 rounded-lg font-black text-[10px] tracking-widest uppercase", statusInfo.color, "border-none shadow-sm")}>
+                        {statusInfo.label}
+                    </Badge>
+                    {saving && <span className="text-[10px] text-orange-500 animate-pulse font-bold uppercase tracking-widest">Saving...</span>}
+                </div>
+                <Button variant="ghost" size="sm" onClick={onSelect} className="h-8 text-[11px] font-black text-blue-500 hover:text-blue-600 hover:bg-blue-50 tracking-wider">
+                    查看详情 <MoreHorizontal className="w-4 h-4 ml-2" />
+                </Button>
             </div>
 
-            {/* Orders */}
-            <div className="space-y-4">
-                {loading ? <div className="text-center py-10 text-gray-500">加载中...</div> : (
-                    orders.map(order => (
-                        <div key={order.order_sn} className="bg-white border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                            {/* Header */}
-                            <div className="bg-gray-50 px-4 py-2 flex items-center justify-between border-b text-sm">
-                                <div className="flex items-center gap-2">
-                                    <div className="w-6 h-6 rounded-full bg-gray-300 overflow-hidden flex items-center justify-center text-xs text-white uppercase">
-                                        {order.buyer_username.slice(0, 1)}
+            <div className="p-8 space-y-8">
+                <div className="space-y-6">
+                    {(order.item_list || []).map((item, idx) => {
+                        const key = `${item.item_id}-${idx}`;
+                        const cost = itemCosts[key] || { purchase: 0, shipping: 0 };
+                        const itemTotalCost = cost.purchase * item.model_quantity_purchased + cost.shipping;
+                        return (
+                            <div key={`${order.order_sn}-${item.item_id}-${idx}`} className="space-y-4">
+                                <div className="flex gap-6 items-start">
+                                    <div className="w-24 h-24 rounded-2xl border border-gray-100 overflow-hidden bg-white shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-500">
+                                        {item.image_info?.image_url && (
+                                            <img src={item.image_info?.image_url} className="w-full h-full object-cover" alt="" />
+                                        )}
                                     </div>
-                                    <span className="font-medium text-gray-900">{order.buyer_username}</span>
+                                    <div className="flex-1 space-y-2">
+                                        <h4 className="text-sm font-black text-gray-900 leading-snug line-clamp-1">{item.item_name}</h4>
+                                        <div className="flex items-center gap-3">
+                                            <div className="text-[11px] font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-md">
+                                                颜色: {item.model_name || '默认'}
+                                            </div>
+                                            <div className="text-[11px] font-black text-gray-900 border border-gray-100 px-2 py-0.5 rounded-md">
+                                                ×{item.model_quantity_purchased}
+                                            </div>
+                                        </div>
+                                        <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">商品ID: {item.item_id}</div>
+                                    </div>
                                 </div>
-                                <div className="text-gray-500 flex items-center gap-4">
-                                    <div className="flex items-center gap-2">
-                                        <span>订单号: {order.order_sn}</span>
-                                        <span className="px-2 py-0.5 bg-orange-100 text-orange-600 rounded text-xs font-medium">
-                                            {getStatusLabel(order.order_status)}
-                                        </span>
+
+                                <div className="bg-gray-50/50 rounded-2xl p-5 border border-gray-100/50 flex flex-wrap gap-8 items-end relative overflow-hidden">
+                                    <div className="absolute top-0 right-0 p-2 opacity-10">
+                                        <Calculator className="w-12 h-12" />
                                     </div>
-                                    <div className="w-[1px] h-3 bg-gray-300 mx-1"></div>
-                                    <button className="text-blue-500 hover:underline" onClick={() => onSelectOrder(order.order_sn)}>查看详情</button>
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">采购成本 (单价)</label>
+                                        <div className="relative">
+                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">¥</span>
+                                            <Input
+                                                className="w-40 h-10 pl-7 font-black bg-white rounded-xl border-gray-200"
+                                                defaultValue={cost.purchase.toFixed(2)}
+                                                type="number"
+                                                onBlur={(e) => handleUpdateCost(item.item_id, item.model_name || "", idx, 'purchase', e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">国内物流成本</label>
+                                        <div className="relative">
+                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">¥</span>
+                                            <Input
+                                                className="w-40 h-10 pl-7 font-black bg-white rounded-xl border-gray-200"
+                                                defaultValue={cost.shipping.toFixed(2)}
+                                                type="number"
+                                                onBlur={(e) => handleUpdateCost(item.item_id, item.model_name || "", idx, 'shipping', e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="flex-1 min-w-[200px] flex flex-col items-end justify-center">
+                                        <div className="flex flex-col items-end mb-1">
+                                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">订单项总成本</span>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => handleSaveToMapping(item.item_id, item.model_name || "", idx)}
+                                                className="h-6 px-2 text-[9px] font-black text-orange-500 hover:text-orange-600 hover:bg-orange-50 -mr-2"
+                                            >
+                                                同步到成本库
+                                            </Button>
+                                        </div>
+                                        <span className="text-xl font-black text-gray-900 leading-none">¥ {itemTotalCost.toFixed(2)}</span>
+                                    </div>
                                 </div>
                             </div>
+                        );
+                    })}
+                </div>
 
-                            {/* Items Logic - We map items, or just first few if too many? For now map all */}
-                            {(order.item_list || []).map((item: any, idx: number) => (
-                                <div key={idx} className="p-4 grid grid-cols-12 gap-4 items-center border-b last:border-0 text-sm">
-                                    {/* Product Column - Expanded to full width */}
-                                    <div className="col-span-12 flex gap-3 cursor-pointer" onClick={() => onSelectOrder(order.order_sn)}>
-                                        <div className="w-16 h-16 flex-shrink-0 border rounded overflow-hidden bg-gray-100">
-                                            {item.image_info?.image_url && (
-                                                <img src={item.image_info?.image_url} className="w-full h-full object-cover" alt="" />
-                                            )}
-                                        </div>
-                                        <div>
-                                            <div className="font-medium line-clamp-2 text-gray-800">{item.item_name}</div>
-                                            <div className="text-gray-500 mt-1">{item.model_name ? `规格: ${item.model_name}` : ''}</div>
-                                            <div className="mt-1 text-gray-600">x{item.model_quantity_purchased}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-
-                            {/* Empty Items Fallback if missing item_list in DB */}
-                            {(!order.item_list || order.item_list.length === 0) && (
-                                <div className="p-4 text-center text-gray-400">暂无商品信息的旧数据</div>
-                            )}
+                <div className="bg-blue-50/30 rounded-2xl p-4 flex items-center justify-between border border-blue-50/50">
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center">
+                            <Calculator className="w-4 h-4 text-blue-500" />
                         </div>
-                    ))
-                )}
-            </div>
+                        <span className="text-xs font-black text-blue-900">订单总成本 <span className="text-blue-500/50 ml-1">({order.item_list?.length} 个订单项)</span></span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <span className="text-xs font-bold text-gray-400">¥</span>
+                        <Input className="w-32 h-10 font-black text-right rounded-xl border-blue-100 bg-white" value={orderTotalCost.toFixed(2)} readOnly />
+                    </div>
+                </div>
 
-            {/* Footer / Pagination */}
-            <div className="flex justify-center mt-6 gap-4 items-center text-sm">
-                <button
-                    disabled={page === 1}
-                    onClick={() => setPage(p => p - 1)}
-                    className="px-4 py-2 border rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                    上一页
-                </button>
-                <div className="px-2">第 {page} 页</div>
-                <button
-                    disabled={orders.length < 20}
-                    onClick={() => setPage(p => p + 1)}
-                    className="px-4 py-2 border rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                    下一页
-                </button>
+                {/* Footer Financial Breakdown */}
+                <div className="grid grid-cols-4 gap-4 px-2">
+                    {[
+                        { label: '商品总额', val: financials.itemTotal, color: 'text-gray-900' },
+                        { label: '预估运费总额', val: financials.shipping, color: 'text-orange-600' },
+                        { label: '费用', val: financials.fees, color: 'text-red-500' },
+                        { label: '预估订单收入', val: financials.estimatedRevenue, color: 'text-green-600' }
+                    ].map(f => (
+                        <div key={f.label} className="space-y-1">
+                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{f.label}</p>
+                            <p className={cn("text-lg font-black leading-none", f.color)}>
+                                ¥ {f.val.toFixed(2)}
+                            </p>
+                        </div>
+                    ))}
+                </div>
             </div>
         </div>
     );

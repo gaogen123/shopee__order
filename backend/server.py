@@ -21,7 +21,7 @@ import requests
 import time
 import hmac
 import hashlib
-from token_manager import get_valid_token, PARTNER_ID, PARTNER_KEY, HOST
+from token_manager import get_valid_token, PARTNER_ID, PARTNER_KEY, HOST, ALL_SHOPS
 
 app = FastAPI()
 
@@ -125,9 +125,30 @@ def init_db_tables(conn):
             model_quantity_purchased INTEGER,
             model_discounted_price REAL,
             image_info TEXT,
+            purchase_cost REAL DEFAULT 0,
+            domestic_shipping_cost REAL DEFAULT 0,
             FOREIGN KEY(order_sn) REFERENCES orders(order_sn)
         )
     ''')
+    
+    # Check if purchase_cost column exists in order_items table
+    try:
+        c.execute("SELECT purchase_cost FROM order_items LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            c.execute("ALTER TABLE order_items ADD COLUMN purchase_cost REAL DEFAULT 0")
+        except:
+            pass
+    
+    # Check if domestic_shipping_cost column exists in order_items table
+    try:
+        c.execute("SELECT domestic_shipping_cost FROM order_items LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            c.execute("ALTER TABLE order_items ADD COLUMN domestic_shipping_cost REAL DEFAULT 0")
+        except:
+            pass
+    
     c.execute('''
         CREATE TABLE IF NOT EXISTS order_item_costs (
             order_sn TEXT,
@@ -392,18 +413,28 @@ def update_order_cost(order_sn: str, update: CostUpdate):
 class ItemCostUpdate(BaseModel):
     item_id: int
     model_id: int = 0
-    sourcing_price: float
+    sourcing_price: float = 0
+    purchase_cost: float = 0
+    domestic_shipping_cost: float = 0
 
 @app.post("/api/order/{order_sn}/items/cost")
 def update_item_costs(order_sn: str, updates: list[ItemCostUpdate]):
     conn = get_db_connection()
     c = conn.cursor()
     for u in updates:
+        # Update order_item_costs table (legacy)
         c.execute("""
             INSERT INTO order_item_costs (order_sn, item_id, model_id, sourcing_price)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(order_sn, item_id, model_id) DO UPDATE SET sourcing_price=excluded.sourcing_price
         """, (order_sn, u.item_id, u.model_id, u.sourcing_price))
+        
+        # Update order_items table with purchase_cost and domestic_shipping_cost
+        c.execute("""
+            UPDATE order_items 
+            SET purchase_cost = ?, domestic_shipping_cost = ?
+            WHERE order_sn = ? AND item_id = ?
+        """, (u.purchase_cost, u.domestic_shipping_cost, order_sn, u.item_id))
     conn.commit()
     conn.close()
     return {"status": "success"}
@@ -439,8 +470,8 @@ def get_orders(
     c.execute(f"SELECT count(*) FROM orders WHERE {where_str}", params)
     total = c.fetchone()[0]
     
-    # Fetch
-    query = f"SELECT raw_data, order_sn, order_status, total_amount, currency, create_time, buyer_username FROM orders WHERE {where_str} ORDER BY create_time DESC LIMIT ? OFFSET ?"
+    # Fetch orders
+    query = f"SELECT raw_data, order_sn, order_status, total_amount, currency, create_time, buyer_username, shop_id, estimated_shipping_fee, total_cost FROM orders WHERE {where_str} ORDER BY create_time DESC LIMIT ? OFFSET ?"
     params.append(limit)
     params.append((page - 1) * limit)
     
@@ -460,6 +491,38 @@ def get_orders(
         order['order_status'] = r['order_status']
         order['buyer_username'] = r['buyer_username'] if r['buyer_username'] else (order.get('buyer_username', ''))
         order['total_amount'] = r['total_amount']
+        order['shop_id'] = r['shop_id']
+        order['estimated_shipping_fee'] = r['estimated_shipping_fee']
+        order['create_time'] = r['create_time']
+        order['total_cost'] = r['total_cost'] or 0  # 采购总成本（订单级别）
+        
+        # Fetch order items with costs
+        c.execute("""
+            SELECT item_id, item_name, model_name, model_quantity_purchased, 
+                   model_discounted_price, image_info, purchase_cost, domestic_shipping_cost
+            FROM order_items 
+            WHERE order_sn = ?
+        """, (r['order_sn'],))
+        items_rows = c.fetchall()
+        
+        # Merge with raw_data item_list or create new items
+        items_from_db = []
+        for item_row in items_rows:
+            items_from_db.append({
+                'item_id': item_row['item_id'],
+                'item_name': item_row['item_name'],
+                'model_name': item_row['model_name'],
+                'model_quantity_purchased': item_row['model_quantity_purchased'],
+                'model_discounted_price': item_row['model_discounted_price'],
+                'image_info': json.loads(item_row['image_info']) if item_row['image_info'] else None,
+                'purchase_cost': item_row['purchase_cost'] or 0,
+                'domestic_shipping_cost': item_row['domestic_shipping_cost'] or 0,
+            })
+        
+        # If we have items from DB, use them; otherwise fallback to raw_data
+        if items_from_db:
+            order['item_list'] = items_from_db
+        
         orders.append(order)
              
     conn.close()
@@ -597,8 +660,48 @@ def sync_single_order(req: SingleSyncRequest):
         return {"status": "success"}
     return {"status": "error", "message": "Failed to fetch order data"}
 
+@app.get("/api/shops")
+def get_shops_endpoint():
+    """
+    Return the list of configured shops, grouping them by Region (as 'sites').
+    """
+    formatted_shops = []
+    regions = set()
+    
+    for shop in ALL_SHOPS:
+        region = shop.get('region', 'Unknown')
+        regions.add(region)
+        
+        formatted_shops.append({
+            "value": str(shop['id']),
+            "label": shop['name'],
+            "siteId": region, # Use region as the siteId for filtering
+            "region": region
+        })
+    
+    # Sort regions
+    sorted_regions = sorted(list(regions))
+    
+    # Build sites list from regions
+    formatted_sites = [{ "value": "all", "label": "全部站点" }]
+    for r in sorted_regions:
+        formatted_sites.append({
+            "value": r,
+            "label": r 
+        })
+    
+    return {
+        "shops": formatted_shops,
+        "sites": formatted_sites
+    }
+
 if __name__ == "__main__":
     print("🚀 Server starting with LATEST FINANCIAL LOGIC (Merged Escrow + Tax)...")
+    # Initialize database tables
+    conn = get_db_connection()
+    init_db_tables(conn)
+    conn.close()
+    print("✅ Database tables initialized")
     import uvicorn
     # Run on 0.0.0.0:8000
     uvicorn.run(app, host="0.0.0.0", port=8000)
