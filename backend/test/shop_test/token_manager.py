@@ -2,8 +2,28 @@ import time
 import hmac
 import hashlib
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import json
 import os
+
+# 配置requests重试策略
+def create_session_with_retries():
+    """创建带有重试机制的requests session"""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+# 创建全局session
+api_session = create_session_with_retries()
 
 # Configuration
 PARTNER_ID = 2014583
@@ -103,7 +123,8 @@ def refresh_access_token(id_val, current_refresh_token, is_main_account=False):
         print(f"Refreshing token for Shop {id_val}...")
         
     try:
-        resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
+        # 使用带重试机制的session，并设置30秒超时
+        resp = api_session.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
         result = resp.json()
         
         if "error" in result and result["error"]:
