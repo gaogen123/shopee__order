@@ -70,53 +70,8 @@ def get_db_connection():
 
 def init_db_tables(conn):
     c = conn.cursor()
-    # Check if escrow_data column exists, if not add it (simple migration)
-    try:
-        c.execute("SELECT escrow_data FROM orders LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE orders ADD COLUMN escrow_data TEXT")
-        except:
-            pass # Table might not exist yet, create below
-
-    # Check if estimated_shipping_fee column exists
-    try:
-        c.execute("SELECT estimated_shipping_fee FROM orders LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE orders ADD COLUMN estimated_shipping_fee REAL")
-        except:
-            pass
-
- 
-
-    # Check if purchase_cost column exists
-    try:
-        c.execute("SELECT purchase_cost FROM orders LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE orders ADD COLUMN purchase_cost REAL DEFAULT 0")
-        except:
-            pass
-
-    # Check if domestic_shipping_cost column exists
-    try:
-        c.execute("SELECT domestic_shipping_cost FROM orders LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE orders ADD COLUMN domestic_shipping_cost REAL DEFAULT 0")
-        except:
-            pass
-
-    # Check if total_cost column exists
-    try:
-        c.execute("SELECT total_cost FROM orders LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE orders ADD COLUMN total_cost REAL DEFAULT 0")
-        except:
-            pass
-
+    
+    # 1. Create Tables First (ensure latest schema is used for new tables)
     c.execute('''
         CREATE TABLE IF NOT EXISTS orders (
             order_sn TEXT PRIMARY KEY,
@@ -127,6 +82,7 @@ def init_db_tables(conn):
             cost REAL DEFAULT 0,
             purchase_cost REAL DEFAULT 0,
             domestic_shipping_cost REAL DEFAULT 0,
+            total_cost REAL DEFAULT 0,
             currency TEXT,
             create_time INTEGER,
             pay_time INTEGER,
@@ -139,6 +95,7 @@ def init_db_tables(conn):
             updated_at INTEGER
         )
     ''')
+    
     c.execute('''
         CREATE TABLE IF NOT EXISTS order_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,23 +114,6 @@ def init_db_tables(conn):
         )
     ''')
     
-    # Check for new columns in order_items
-    try:
-        c.execute("SELECT model_id FROM order_items LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE order_items ADD COLUMN model_id INTEGER")
-        except:
-            pass
-            
-    try:
-        c.execute("SELECT model_sku FROM order_items LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE order_items ADD COLUMN model_sku TEXT")
-        except:
-            pass
-
     c.execute('''
         CREATE TABLE IF NOT EXISTS cost_mappings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -189,24 +129,6 @@ def init_db_tables(conn):
         )
     ''')
     
-    # Check if purchase_cost column exists in order_items table
-    try:
-        c.execute("SELECT purchase_cost FROM order_items LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE order_items ADD COLUMN purchase_cost REAL DEFAULT 0")
-        except:
-            pass
-    
-    # Check if domestic_shipping_cost column exists in order_items table
-    try:
-        c.execute("SELECT domestic_shipping_cost FROM order_items LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE order_items ADD COLUMN domestic_shipping_cost REAL DEFAULT 0")
-        except:
-            pass
-    
     c.execute('''
         CREATE TABLE IF NOT EXISTS order_item_costs (
             order_sn TEXT,
@@ -216,6 +138,32 @@ def init_db_tables(conn):
             PRIMARY KEY (order_sn, item_id, model_id)
         )
     ''')
+
+    # 2. Migrations (Check for columns and add if missing - for existing DBs)
+    # This ensures that even if the table existed with an old schema, we add new columns.
+    
+    migrations = [
+        ("orders", "escrow_data", "TEXT"),
+        ("orders", "estimated_shipping_fee", "REAL"),
+        ("orders", "purchase_cost", "REAL DEFAULT 0"),
+        ("orders", "domestic_shipping_cost", "REAL DEFAULT 0"),
+        ("orders", "total_cost", "REAL DEFAULT 0"),
+        ("order_items", "model_id", "INTEGER"),
+        ("order_items", "model_sku", "TEXT"),
+        ("order_items", "purchase_cost", "REAL DEFAULT 0"),
+        ("order_items", "domestic_shipping_cost", "REAL DEFAULT 0"),
+    ]
+    
+    for table, col, dtype in migrations:
+        try:
+            c.execute(f"SELECT {col} FROM {table} LIMIT 1")
+        except sqlite3.OperationalError:
+            try:
+                print(f"Migrating {table}: Adding {col}...")
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {dtype}")
+            except Exception as e:
+                print(f"Migration Error ({table}.{col}): {e}")
+
     conn.commit()
 
 def generate_shop_sign(path, timestamp, access_token, shop_id):
@@ -293,14 +241,44 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
     
     # Save Items - 删除并重新插入，但保留成本数据
     c.execute('DELETE FROM order_items WHERE order_sn = ?', (order.get('order_sn'),))
+    
+    total_order_purchase_cost = 0.0
+    total_order_domestic_shipping_cost = 0.0
+    
     for item in order.get('item_list', []):
         item_id = item.get('item_id')
         model_id = item.get('model_id', 0)
+        model_sku = item.get('model_sku', '') or '' # Ensure string
         key = f"{item_id}_{model_id}"
         
-        # 恢复之前保存的成本数据（如果存在）
-        costs = existing_costs.get(key, {'purchase_cost': 0, 'domestic_shipping_cost': 0})
+        # 1. 尝试获取现有成本 (Priority 1: Existing on this order item)
+        costs = existing_costs.get(key)
         
+        purchase_cost = 0.0
+        domestic_shipping_cost = 0.0
+        
+        if costs and (costs['purchase_cost'] > 0 or costs['domestic_shipping_cost'] > 0):
+             purchase_cost = costs['purchase_cost']
+             domestic_shipping_cost = costs['domestic_shipping_cost']
+        else:
+             # 2. 如果没有现有成本，尝试从映射表中查找 (Priority 2: Global Mapping)
+             # Note: shop_id in DB is usually stored as string or int, ensure consistency.
+             # cost_mappings uses TEXT for shop_id.
+             c.execute('''
+                 SELECT purchase_cost, domestic_shipping_cost 
+                 FROM cost_mappings 
+                 WHERE shop_id = ? AND item_id = ? AND sku_id = ?
+             ''', (str(shop_id), item_id, model_sku))
+             mapping = c.fetchone()
+             if mapping:
+                 purchase_cost = mapping[0]
+                 domestic_shipping_cost = mapping[1]
+        
+        # Keep track for total
+        qty = item.get('model_quantity_purchased', 1)
+        total_order_purchase_cost += (purchase_cost * qty)
+        total_order_domestic_shipping_cost += (domestic_shipping_cost * qty)
+
         c.execute('''
             INSERT INTO order_items (
                 order_sn, item_id, item_name, model_id, model_name, model_sku,
@@ -313,13 +291,22 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
             item.get('item_name'),
             model_id,
             item.get('model_name'),
-            item.get('model_sku'),
+            model_sku,
             item.get('model_quantity_purchased'),
             item.get('model_discounted_price'),
             json.dumps(item.get('image_info', {})),
-            costs['purchase_cost'],  # 保留用户输入的采购成本
-            costs['domestic_shipping_cost']  # 保留用户输入的国内物流成本
+            purchase_cost, 
+            domestic_shipping_cost
         ))
+    
+    # Update Order Level Costs
+    total_cost = total_order_purchase_cost + total_order_domestic_shipping_cost
+    c.execute('''
+        UPDATE orders 
+        SET purchase_cost = ?, domestic_shipping_cost = ?, total_cost = ?
+        WHERE order_sn = ?
+    ''', (total_order_purchase_cost, total_order_domestic_shipping_cost, total_cost, order.get('order_sn')))
+    
     conn.commit()
 
 def fetch_order_from_api(shop_id, order_sn):
@@ -455,14 +442,14 @@ def get_order(order_sn: str, shop_id: int = Query(494829323, description="Shop I
             'total_fees': commission + service + transaction
         }
 
-    # Merge Item Costs
-    cursor.execute("SELECT item_id, model_id, sourcing_price FROM order_item_costs WHERE order_sn = ?", (order_sn,))
+    # Merge Item Costs from order_items (Source of Truth)
+    cursor.execute("SELECT item_id, model_id, purchase_cost FROM order_items WHERE order_sn = ?", (order_sn,))
     cost_rows = cursor.fetchall()
     cost_map = {}
     for cr in cost_rows:
         mid = cr['model_id'] if cr['model_id'] else 0
         key = f"{cr['item_id']}_{mid}"
-        cost_map[key] = cr['sourcing_price']
+        cost_map[key] = cr['purchase_cost']
 
     if 'item_list' in result_data:
         for item in result_data['item_list']:
@@ -512,7 +499,7 @@ def update_item_costs(order_sn: str, updates: list[ItemCostUpdate]):
     conn = get_db_connection()
     c = conn.cursor()
     for u in updates:
-        # Update order_item_costs table (legacy)
+        # Update order_item_costs table (legacy - keep for compatibility)
         c.execute("""
             INSERT INTO order_item_costs (order_sn, item_id, model_id, sourcing_price)
             VALUES (?, ?, ?, ?)
@@ -520,26 +507,52 @@ def update_item_costs(order_sn: str, updates: list[ItemCostUpdate]):
         """, (order_sn, u.item_id, u.model_id, u.sourcing_price))
         
         # Update order_items table with purchase_cost and domestic_shipping_cost
+        # FIX: Include model_id in the where clause to target specific variation
         c.execute("""
             UPDATE order_items 
             SET purchase_cost = ?, domestic_shipping_cost = ?
-            WHERE order_sn = ? AND item_id = ?
-        """, (u.purchase_cost, u.domestic_shipping_cost, order_sn, u.item_id))
+            WHERE order_sn = ? AND item_id = ? AND model_id = ?
+        """, (u.purchase_cost, u.domestic_shipping_cost, order_sn, u.item_id, u.model_id))
+        
+    # Recalculate Order Totals
+    c.execute("""
+        SELECT SUM(purchase_cost * model_quantity_purchased) as total_purchase,
+               SUM(domestic_shipping_cost * model_quantity_purchased) as total_shipping
+        FROM order_items
+        WHERE order_sn = ?
+    """, (order_sn,))
+    
+    row = c.fetchone()
+    total_purchase = row[0] if row[0] else 0.0
+    total_shipping = row[1] if row[1] else 0.0
+    total_cost = total_purchase + total_shipping
+    
+    c.execute("""
+        UPDATE orders 
+        SET purchase_cost = ?, domestic_shipping_cost = ?, total_cost = ?
+        WHERE order_sn = ?
+    """, (total_purchase, total_shipping, total_cost, order_sn))
+
     conn.commit()
     conn.close()
-    return {"status": "success"}
+    return {"status": "success", "total_cost": total_cost}
 
 @app.get("/api/orders")
 def get_orders(
     status: str = Query(None),
     keyword: str = Query(None),
     page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100)
+    limit: int = Query(20, ge=1, le=100),
+    time_from: int = Query(None),
+    time_to: int = Query(None),
+    shop_id: str = Query(None),
+    site_id: str = Query(None)
 ):
     conn = get_db_connection()
     c = conn.cursor()
+    print(f"DEBUG: get_orders params - time_from: {time_from}, time_to: {time_to}, status: {status}, site_id: {site_id}, shop_id: {shop_id}")
     
-    where_clauses = []
+    where_clauses = ["1=1"]
     params = []
     
     if status and status != 'ALL':
@@ -554,7 +567,30 @@ def get_orders(
         params.append(f"%{keyword}%")
         params.append(f"%{keyword}%")
         
-    where_str = " AND ".join(where_clauses) if where_clauses else "1=1"
+    if time_from:
+        where_clauses.append("create_time >= ?")
+        params.append(time_from)
+        
+    if time_to:
+        where_clauses.append("create_time <= ?")
+        params.append(time_to)
+        
+    if shop_id and shop_id != 'all':
+        where_clauses.append("shop_id = ?")
+        params.append(shop_id)
+    
+    if site_id and site_id != 'all':
+        # Find all shops in this site
+        site_shop_ids = [str(s['id']) for s in ALL_SHOPS if s.get('region') == site_id]
+        if site_shop_ids:
+            placeholders = ','.join(['?'] * len(site_shop_ids))
+            where_clauses.append(f"shop_id IN ({placeholders})")
+            params.extend(site_shop_ids)
+        else:
+            # Site has no shops, return nothing
+            where_clauses.append("1=0")
+        
+    where_str = " AND ".join(where_clauses)
     
     # Count
     c.execute(f"SELECT count(*) FROM orders WHERE {where_str}", params)
@@ -929,13 +965,217 @@ def get_mappings():
         })
     return mappings
 
+@app.get("/api/dashboard/stats")
+def get_dashboard_stats(
+    time_from: int = Query(None),
+    time_to: int = Query(None),
+    shop_id: str = Query(None),
+    site_id: str = Query(None),
+    status: str = Query(None)
+):
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    where_clauses = ["1=1"]
+    params = []
+    
+    if time_from:
+        where_clauses.append("create_time >= ?")
+        params.append(time_from)
+        
+    if time_to:
+        where_clauses.append("create_time <= ?")
+        params.append(time_to)
+        
+    if shop_id and shop_id != 'all':
+        where_clauses.append("shop_id = ?")
+        params.append(shop_id)
+        
+    if site_id and site_id != 'all':
+        # Find all shops in this site
+        site_shop_ids = [str(s['id']) for s in ALL_SHOPS if s.get('region') == site_id]
+        if site_shop_ids:
+            placeholders = ','.join(['?'] * len(site_shop_ids))
+            where_clauses.append(f"shop_id IN ({placeholders})")
+            params.extend(site_shop_ids)
+        else:
+            # Site has no shops, return nothing
+            where_clauses.append("1=0")
+
+    if status and status != 'all':
+        if status == 'CANCELLED':
+             where_clauses.append("order_status IN ('CANCELLED', 'TO_RETURN')")
+        else:
+             where_clauses.append("order_status = ?")
+             params.append(status)
+        
+    where_str = " AND ".join(where_clauses)
+    
+    # 1. Order Counts
+    c.execute(f"""
+        SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN order_status = 'READY_TO_SHIP' THEN 1 ELSE 0 END) as to_ship,
+            SUM(CASE WHEN order_status IN ('SHIPPING', 'TO_CONFIRM_RECEIVE') THEN 1 ELSE 0 END) as shipping,
+            SUM(CASE WHEN order_status = 'COMPLETED' THEN 1 ELSE 0 END) as completed,
+            SUM(CASE WHEN order_status IN ('CANCELLED', 'TO_RETURN') THEN 1 ELSE 0 END) as cancelled,
+            SUM(CASE WHEN total_cost > 0 THEN 1 ELSE 0 END) as cost_entered,
+            SUM(CASE WHEN total_cost <= 0 OR total_cost IS NULL THEN 1 ELSE 0 END) as cost_not_entered
+        FROM orders
+        WHERE {where_str}
+    """, params)
+    
+    counts = c.fetchone()
+    
+    # 2. Financials & Timeline - 需要获取raw_data来计算准确的预估收入
+    c.execute(f"""
+        SELECT 
+            total_amount,
+            escrow_data,
+            total_cost,
+            order_status,
+            create_time,
+            currency,
+            raw_data
+        FROM orders
+        WHERE {where_str}
+        ORDER BY create_time ASC
+    """, params)
+    
+    rows = c.fetchall()
+    
+    total_sales = 0.0
+    total_product_cost = 0.0
+    total_profit = 0.0
+    
+    daily_stats = {} # "YYYY-MM-DD" -> {sales, cost, profit}
+    
+    from datetime import datetime
+
+    # Hardcoded Exchange Rates (Should optimally come from DB or API)
+    EXCHANGE_RATES = {
+        'BRL': 1.25, 'USD': 7.2, 'SGD': 5.3, 'MYR': 1.6,
+        'PHP': 0.13, 'IDR': 0.00046, 'THB': 0.2, 'VND': 0.00029, 'TWD': 0.23,
+        'CNY': 1.0
+    }
+    
+    for r in rows:
+        if r[3] in ('CANCELLED', 'TO_RETURN'):
+            continue 
+            
+        amount = r[0] if r[0] else 0
+        cost = r[2] if r[2] else 0 # Cost is already in CNY
+        create_time = r[4]
+        currency = r[5] if r[5] else 'CNY'
+        raw_data_str = r[6]
+        
+        rate = EXCHANGE_RATES.get(currency, 1.0)
+        
+        # 计算预估订单收入 - 与OrderDetail.tsx保持一致
+        # estimatedRevenue = itemTotal + estimatedShipping - totalFees
+        estimated_revenue = 0.0
+        
+        try:
+            # 解析raw_data获取item_list
+            raw_data = json.loads(raw_data_str) if raw_data_str else {}
+            item_list = raw_data.get('item_list', [])
+            
+            # 计算商品总额(折扣后)
+            item_total = sum(
+                item.get('model_discounted_price', 0) * item.get('model_quantity_purchased', 0)
+                for item in item_list
+            )
+            
+            # 从escrow_data获取费用和运费信息
+            escrow_data = json.loads(r[1]) if r[1] else {}
+            
+            # 预估运费 = estimated_shipping_fee - actual_shipping_fee
+            estimated_shipping_fee = float(escrow_data.get('estimated_shipping_fee', 0))
+            actual_shipping_fee = float(escrow_data.get('actual_shipping_fee', 0))
+            estimated_shipping = estimated_shipping_fee - actual_shipping_fee
+            
+            # 总费用 = 佣金 + 服务费 + 交易手续费
+            commission = float(escrow_data.get('commission_fee', 0))
+            service = float(escrow_data.get('service_fee', 0))
+            transaction = float(escrow_data.get('seller_transaction_fee', 0))
+            total_fees = commission + service + transaction
+            
+            # 预估订单收入 = 商品总额 + 预估运费 - 总费用
+            estimated_revenue = item_total + estimated_shipping - total_fees
+            
+        except Exception as e:
+            # 如果计算失败,使用fallback逻辑
+            print(f"Error calculating estimated revenue for order: {e}")
+            if r[1]:
+                try:
+                    ed = json.loads(r[1])
+                    if 'order_income_amount' in ed:
+                        estimated_revenue = float(ed['order_income_amount'])
+                    elif 'buyer_total_amount' in ed:
+                        fees = float(ed.get('commission_fee', 0)) + float(ed.get('service_fee', 0)) + float(ed.get('seller_transaction_fee', 0))
+                        estimated_revenue = float(ed['buyer_total_amount']) - fees
+                    else:
+                        estimated_revenue = amount * 0.9
+                except:
+                    estimated_revenue = amount * 0.9
+            else:
+                estimated_revenue = amount * 0.88
+        
+        # Convert to CNY
+        sales_cny = amount * rate
+        revenue_cny = estimated_revenue * rate
+        
+        # 利润 = 预估订单收入(CNY) - 总成本
+        profit = revenue_cny - cost
+        
+        total_sales += sales_cny
+        total_product_cost += cost
+        total_profit += profit
+        
+        # Aggregate Daily
+        if create_time:
+            dt = datetime.fromtimestamp(create_time)
+            date_str = dt.strftime('%Y-%m-%d')
+            if date_str not in daily_stats:
+                daily_stats[date_str] = {"date": date_str, "sales": 0.0, "cost": 0.0, "profit": 0.0}
+            
+            daily_stats[date_str]["sales"] += sales_cny
+            daily_stats[date_str]["cost"] += cost
+            daily_stats[date_str]["profit"] += profit
+
+    conn.close()
+    
+    total_count = counts[0] if counts[0] else 0
+    
+    # Convert daily_stats to list
+    history_list = sorted(daily_stats.values(), key=lambda x: x['date'])
+    
+    return {
+        "orders": {
+            "total": total_count,
+            "to_ship": counts[1] if counts[1] else 0,
+            "shipping": counts[2] if counts[2] else 0,
+            "completed": counts[3] if counts[3] else 0,
+            "cancelled": counts[4] if counts[4] else 0,
+            "cost_entered": counts[5] if counts[5] else 0,
+            "cost_not_entered": counts[6] if counts[6] else 0
+        },
+        "financials": {
+            "sales": total_sales,
+            "cost": total_product_cost,
+            "profit": total_profit,
+            "margin": (total_profit / total_sales * 100) if total_sales > 0 else 0
+        },
+        "history": history_list
+    }
+
 if __name__ == "__main__":
-    print("🚀 Server starting with LATEST FINANCIAL LOGIC (Merged Escrow + Tax)...")
+    print("Server starting with LATEST FINANCIAL LOGIC (Merged Escrow + Tax)...")
     # Initialize database tables
     conn = get_db_connection()
     init_db_tables(conn)
     conn.close()
-    print("✅ Database tables initialized")
+    print("Database tables initialized")
     import uvicorn
     # Run on 0.0.0.0:8000
     uvicorn.run(app, host="0.0.0.0", port=8000)

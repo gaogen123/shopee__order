@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Search, ChevronDown, RefreshCw, Store, Globe, Calculator, MoreHorizontal, Sparkles, Save } from 'lucide-react';
+import { Search, ChevronDown, RefreshCw, MoreHorizontal, Sparkles, Save, Calculator } from 'lucide-react';
 import { DateRangePicker } from './DateRangePicker';
+import { SiteShopSelector } from './SiteShopSelector';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
@@ -32,6 +33,16 @@ interface OrderSummary {
     domestic_shipping_cost?: number;
     total_cost?: number;
     escrow_info?: any;
+    financials?: {
+        total_fees: number;
+        order_income: number;
+        commission_fee: number;
+        service_fee: number;
+        seller_transaction_fee: number;
+        buyer_paid_shipping: number;
+        shopee_shipping_rebate: number;
+        actual_shipping_fee: number;
+    };
 }
 
 interface OrderListProps {
@@ -63,19 +74,32 @@ interface Shop {
     region: string;
 }
 
+interface Site {
+    value: string;
+    label: string;
+}
+
 export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSaved, syncing, syncTask, refreshTrigger }: OrderListProps) {
     const [activeTab, setActiveTab] = useState('ALL');
     const [keyword, setKeyword] = useState('');
     const [orders, setOrders] = useState<OrderSummary[]>([]);
     const [mappings, setMappings] = useState<CostMapping[]>([]);
     const [shops, setShops] = useState<Shop[]>([]);
+    const [sites, setSites] = useState<Site[]>([]);
+
+    // Filter States
+    const [selectedSite, setSelectedSite] = useState('all');
+    const [selectedShop, setSelectedShop] = useState('all');
+
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
     const [loading, setLoading] = useState(false);
     const [selectedSns, setSelectedSns] = useState<Set<string>>(new Set());
+
+    // Default to last 30 days (Consistent with Dashboard)
     const [startDate, setStartDate] = useState(() => {
         const d = new Date();
-        d.setDate(d.getDate() - 7);
+        d.setDate(d.getDate() - 30);
         return d.toISOString().split('T')[0];
     });
     const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -98,6 +122,23 @@ export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSave
             });
             if (activeTab !== 'ALL') params.append('status', activeTab);
             if (keyword) params.append('keyword', keyword);
+
+            // Date Filtering
+            if (startDate) {
+                const [y, m, d] = startDate.split('-').map(Number);
+                const startTs = Math.floor(new Date(y, m - 1, d).getTime() / 1000);
+                params.append('time_from', startTs.toString());
+            }
+            if (endDate) {
+                const [y, m, d] = endDate.split('-').map(Number);
+                // Include the entire end day (add 24 hours to the start of the end day)
+                const endTs = Math.floor(new Date(y, m - 1, d).getTime() / 1000) + 86400;
+                params.append('time_to', endTs.toString());
+            }
+
+            // Site/Shop Filtering
+            if (selectedSite !== 'all') params.append('site_id', selectedSite);
+            if (selectedShop !== 'all') params.append('shop_id', selectedShop);
 
             const res = await fetch(`http://localhost:8000/api/orders?${params}`);
             const data = await res.json();
@@ -123,13 +164,18 @@ export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSave
                 const shopsData = await shopsRes.json();
                 setMappings(mappingsData);
                 setShops(shopsData.shops || []);
+                setSites(shopsData.sites || []);
             } catch (e) {
                 console.error("Failed to load mappings or shops", e);
             }
         };
         fetchMappingsAndShops();
+    }, []); // Only load once
+
+    // Re-fetch orders when filters change
+    useEffect(() => {
         fetchOrders();
-    }, [activeTab, page, refreshTrigger]);
+    }, [activeTab, page, refreshTrigger, startDate, endDate, selectedSite, selectedShop]);
 
     const handleMappingSaved = () => {
         // Refresh mappings
@@ -174,22 +220,16 @@ export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSave
                     </Button>
                 </div>
 
-                {/* Site & Shop Selectors - New Wide Row */}
-                <div className="flex gap-4">
-                    <Button variant="outline" className="flex-1 h-11 gap-2 bg-white border-gray-200 hover:bg-gray-50 shadow-sm transition-all rounded-xl justify-between px-4 border">
-                        <div className="flex items-center gap-3">
-                            <Globe className="w-5 h-5 text-blue-500" />
-                            <span className="font-bold text-gray-900">全部站点</span>
-                        </div>
-                        <ChevronDown className="w-4 h-4 text-gray-400" />
-                    </Button>
-                    <Button variant="outline" className="flex-1 h-11 gap-2 bg-white border-gray-200 hover:bg-gray-50 shadow-sm transition-all rounded-xl justify-between px-4 border">
-                        <div className="flex items-center gap-3">
-                            <Store className="w-5 h-5 text-orange-500" />
-                            <span className="font-bold text-gray-900">全部店铺</span>
-                        </div>
-                        <ChevronDown className="w-4 h-4 text-gray-400" />
-                    </Button>
+                {/* Site & Shop Selectors */}
+                <div className="w-full">
+                    <SiteShopSelector
+                        selectedSite={selectedSite}
+                        selectedShop={selectedShop}
+                        onSiteChange={(v) => { setSelectedSite(v); setPage(1); }}
+                        onShopChange={(v) => { setSelectedShop(v); setPage(1); }}
+                        sites={sites}
+                        shops={shops}
+                    />
                 </div>
 
                 {/* Filter Bar */}
@@ -366,8 +406,6 @@ export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSave
     );
 }
 
-}
-
 function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved, mappings, shops, itemCosts: propItemCosts }: {
     order: OrderSummary,
     onSelect: () => void,
@@ -379,7 +417,7 @@ function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved, 
     itemCosts?: any
 }) {
     const [itemCosts, setItemCosts] = useState<{ [key: string]: { purchase: number, shipping: number } }>(
-        propItemCosts || (order.item_list || []).reduce((acc, item, idx) => ({
+        propItemCosts || (order.item_list || []).reduce((acc: any, item: any, idx: number) => ({
             ...acc,
             [`${item.item_id}-${idx}`]: {
                 purchase: item.purchase_cost || 0,
@@ -456,7 +494,7 @@ function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved, 
         handleUpdateCost(itemId, modelName, idx, 'shipping', String(shipping));
     };
 
-    const statusInfo = {
+    const statusInfo: any = {
         'UNPAID': { label: '待付款', color: 'bg-orange-100 text-orange-600' },
         'READY_TO_SHIP': { label: '待出货', color: 'bg-blue-100 text-blue-600' },
         'SHIPPED': { label: '运送中', color: 'bg-purple-100 text-purple-600' },
@@ -465,19 +503,79 @@ function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved, 
         'TO_RETURN': { label: '退货/退款', color: 'bg-red-50 text-red-500' }
     }[order.order_status] || { label: order.order_status, color: 'bg-gray-100 text-gray-600' };
 
+    // Safe Access helper
+    const getVal = (val: any) => parseFloat(val) || 0;
+
     const escrow = order.escrow_info || {};
+
+    // Financial Components
+    const itemTotal = getVal(escrow.original_price) || getVal(order.total_amount); // Fallback to total if original missing? No, total_amount includes shipping.
+    // Better Item Total: Sum of items specific price?
+    const calculatedItemTotal = (order.item_list || []).reduce((acc, item) => acc + (item.model_discounted_price || 0) * item.model_quantity_purchased, 0);
+    const finalItemTotal = calculatedItemTotal > 0 ? calculatedItemTotal : (getVal(escrow.original_price) || 0);
+
+    const buyerPaidShipping = getVal(escrow.buyer_paid_shipping_fee) || getVal(order.financials?.buyer_paid_shipping);
+    const shopeeRebate = getVal(escrow.shopee_shipping_rebate) || getVal(order.financials?.shopee_shipping_rebate);
+    const actualShipping = getVal(escrow.actual_shipping_fee) || getVal(order.financials?.actual_shipping_fee);
+    const estimatedShipping = getVal(escrow.estimated_shipping_fee) || getVal(order.estimated_shipping_fee);
+
+    // Dynamic Shipping for Loop
+    // Income Logic:
+    // If completed: order_income_amount is accurate.
+    // If not: ItemTotal + (BuyerPaidShipping + Rebate - ActualShipping) - Fees
+    // But ActualShipping might be 0 if not shipped. Then use Estimated? Or 0?
+    // Let's use logic from OrderDetail:
+    // estimatedRevenue = order_income_amount ?? ((ItemTotal + EstimatedShipping - ActualShipping) - TotalFees) 
+    // Wait, OrderDetail has: ((calculatedItemTotal + ((estimated_shipping_fee) - (actual_shipping_fee))) - fees)
+    // This implies 'estimated_shipping_fee' contains (BuyerPaid - Rebate)? No.
+    // Let's stick to a safe net logic:
+
+    const fees = getVal(escrow.commission_fee) + getVal(escrow.service_fee) + getVal(escrow.seller_transaction_fee);
+
+    let estimatedRevenue = getVal(escrow.order_income_amount);
+
+    if (estimatedRevenue <= 0) {
+        // Fallback Calculation
+        const shippingIncome = buyerPaidShipping + shopeeRebate;
+        let shippingCost = actualShipping > 0 ? actualShipping : estimatedShipping;
+
+        // Critical Fix for Estimations:
+        // If we don't know the shipping cost (est=0, actual=0) but buyer paid shipping,
+        // we should conservatively assume the cost is at least what the buyer paid,
+        // so we don't count buyer's shipping payment as pure profit.
+        if (shippingCost === 0 && buyerPaidShipping > 0) {
+            shippingCost = buyerPaidShipping;
+        }
+
+        estimatedRevenue = finalItemTotal + shippingIncome - shippingCost - fees;
+    }
+
     const financials = {
-        itemTotal: escrow.original_price || order.total_amount,
-        shipping: (escrow.estimated_shipping_fee || 0) + (escrow.shopee_shipping_rebate || 0),
-        fees: (escrow.commission_fee || 0) + (escrow.service_fee || 0) + (escrow.seller_transaction_fee || 0),
-        estimatedRevenue: escrow.order_income_amount || order.total_amount,
-        totalPaid: escrow.buyer_total_amount || order.total_amount
+        itemTotal: finalItemTotal,
+        shipping: estimatedShipping,
+        fees: fees,
+        estimatedRevenue: estimatedRevenue,
+        totalPaid: getVal(escrow.buyer_total_amount) || getVal(order.total_amount)
     };
 
-    const orderTotalCost = Object.values(itemCosts).reduce((sum, cost, idx) => {
+    // Exchange Rates (Consistent with Dashboard)
+    const currency = order.currency || 'BRL';
+    const EXCHANGE_RATES: { [key: string]: number } = {
+        'BRL': 1.25, 'USD': 7.2, 'SGD': 5.3, 'MYR': 1.6,
+        'PHP': 0.13, 'IDR': 0.00046, 'THB': 0.2, 'VND': 0.00029, 'TWD': 0.23,
+        'CNY': 1.0
+    };
+    const rate = EXCHANGE_RATES[currency] || 1.0;
+    const currencySymbol = currency === 'BRL' ? 'R$' : (currency === 'USD' ? '$' : currency);
+
+    const orderTotalCost = Object.values(itemCosts).reduce((sum: number, cost: any, idx) => {
         const qty = order.item_list[idx]?.model_quantity_purchased || 0;
         return sum + (cost.purchase * qty) + cost.shipping;
     }, 0);
+
+    // Calculate Profit: (Revenue * Rate) - Cost
+    const revenueRMB = financials.estimatedRevenue * rate;
+    const estimatedProfit = revenueRMB - orderTotalCost;
 
     return (
         <div className={cn(
@@ -641,20 +739,40 @@ function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved, 
                 </div>
 
                 {/* Footer Financial Breakdown */}
-                <div className="grid grid-cols-4 gap-4 px-2">
-                    {[
-                        { label: '商品总额', val: financials.itemTotal, color: 'text-gray-900' },
-                        { label: '预估运费总额', val: financials.shipping, color: 'text-orange-600' },
-                        { label: '费用', val: financials.fees, color: 'text-red-500' },
-                        { label: '预估订单收入', val: financials.estimatedRevenue, color: 'text-green-600' }
-                    ].map(f => (
-                        <div key={f.label} className="space-y-1">
-                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{f.label}</p>
-                            <p className={cn("text-lg font-black leading-none", f.color)}>
-                                ¥ {f.val.toFixed(2)}
-                            </p>
-                        </div>
-                    ))}
+                <div className="grid grid-cols-5 gap-4 px-2">
+                    <div className="space-y-1">
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">商品总额</p>
+                        <p className="text-lg font-black leading-none text-gray-900">
+                            {currencySymbol} {financials.itemTotal.toFixed(2)}
+                        </p>
+                    </div>
+                    <div className="space-y-1">
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">预估运费总额</p>
+                        <p className="text-lg font-black leading-none text-orange-600">
+                            {currencySymbol} {financials.shipping.toFixed(2)}
+                        </p>
+                    </div>
+                    <div className="space-y-1">
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">费用</p>
+                        <p className="text-lg font-black leading-none text-red-500">
+                            {currencySymbol} {financials.fees.toFixed(2)}
+                        </p>
+                    </div>
+                    <div className="space-y-1">
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">预估订单收入</p>
+                        <p className="text-lg font-black leading-none text-green-600">
+                            {currencySymbol} {financials.estimatedRevenue.toFixed(2)}
+                        </p>
+                    </div>
+                    {/* Profit Section */}
+                    <div className="space-y-1 bg-green-50/50 -my-2 -mx-2 px-2 py-2 rounded-xl border border-green-100/50">
+                        <p className="text-[10px] font-black text-emerald-600/70 uppercase tracking-widest flex items-center gap-1">
+                            预估利润 <span className="text-[8px] bg-white px-1 rounded shadow-sm border border-green-100">CNY</span>
+                        </p>
+                        <p className={cn("text-xl font-black leading-none", estimatedProfit >= 0 ? "text-emerald-600" : "text-red-500")}>
+                            ¥ {estimatedProfit.toFixed(2)}
+                        </p>
+                    </div>
                 </div>
             </div>
         </div>

@@ -15,6 +15,8 @@ export interface OrderItem {
   domesticShippingCost?: number; // 国内物流成本
   price?: number; // 商品单价（售价）
   sku?: string; // SKU
+  modelId?: number;
+  originalItemId?: number;
 }
 
 export interface Order {

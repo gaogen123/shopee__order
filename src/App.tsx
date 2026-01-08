@@ -562,6 +562,8 @@ export default function App() {
               sku: item.model_sku || item.item_sku || '',
               purchaseCost: item.purchase_cost || 0,
               domesticShippingCost: item.domestic_shipping_cost || 0,
+              modelId: item.model_id,
+              originalItemId: item.item_id
             }));
 
             // Extract shop_id from raw_data or use a default
@@ -851,18 +853,43 @@ export default function App() {
     }
   };
 
+  const handleDashboardViewOrder = (orderInfo: { orderNumber: string, shopId: string, siteId: string }) => {
+    const existing = orders.find(o => o.orderNumber === orderInfo.orderNumber);
+    if (existing) {
+      setSelectedOrderDetail(existing);
+    } else {
+      // Minimal object sufficient for OrderDetail props extraction
+      setSelectedOrderDetail({
+        id: orderInfo.orderNumber,
+        orderNumber: orderInfo.orderNumber,
+        shopId: orderInfo.shopId,
+        siteId: orderInfo.siteId,
+        // Dummies to satisfy type
+        username: '', status: 'pending', statusText: '', orderDate: '', items: [], shippingFee: 0, otherFees: 0, estimatedRevenue: 0, currency: '', exchangeRate: 1
+      } as unknown as Order);
+    }
+  };
+
   const handleItemCostUpdate = (orderId: string, itemId: string, purchaseCost: number, domesticShippingCost: number) => {
     // 更新前端状态
     setOrders(prevOrders =>
       prevOrders.map(order => {
         if (order.id === orderId) {
+          const updatedItems = order.items.map(item =>
+            item.id === itemId
+              ? { ...item, purchaseCost, domesticShippingCost }
+              : item
+          );
+
+          // Re-calculate total cost immediately so UI updates
+          const newTotalCost = updatedItems.reduce((sum, item) =>
+            sum + ((item.purchaseCost || 0) + (item.domesticShippingCost || 0)) * item.quantity, 0
+          );
+
           return {
             ...order,
-            items: order.items.map(item =>
-              item.id === itemId
-                ? { ...item, purchaseCost, domesticShippingCost }
-                : item
-            )
+            items: updatedItems,
+            manualTotalCost: newTotalCost
           };
         }
         return order;
@@ -873,16 +900,12 @@ export default function App() {
     const order = orders.find(o => o.id === orderId);
     const item = order?.items.find(i => i.id === itemId);
     if (order && item) {
-      // 从 itemId 提取 item_id（格式：order_sn-item_id）
-      const itemIdParts = itemId.split('-');
-      const numericItemId = parseInt(itemIdParts[itemIdParts.length - 1]) || 0;
-
       fetch(`http://localhost:8000/api/order/${orderId}/items/cost`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify([{
-          item_id: numericItemId,
-          model_id: 0,
+          item_id: item.originalItemId || 0,
+          model_id: item.modelId || 0,
           sourcing_price: purchaseCost,
           purchase_cost: purchaseCost,
           domestic_shipping_cost: domesticShippingCost,
@@ -1305,7 +1328,7 @@ export default function App() {
         ) : currentView === 'dashboard' ? (
           /* Dashboard View */
           <div className="flex-1 overflow-y-auto">
-            <Dashboard />
+            <Dashboard onViewOrder={handleDashboardViewOrder} />
           </div>
         ) : (
           /* Mappings View */

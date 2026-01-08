@@ -1,121 +1,236 @@
-import { TrendingUp, TrendingDown, ShoppingBag, DollarSign, Package, AlertCircle } from 'lucide-react';
+import { TrendingUp, TrendingDown, ShoppingBag, DollarSign, Package, AlertCircle, RefreshCw, ChevronRight } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { SiteShopSelector } from './SiteShopSelector';
+import { Pagination } from './Pagination';
 
-export function Dashboard() {
+// API Response Types
+interface DashboardStats {
+    orders: {
+        total: number;
+        to_ship: number;
+        shipping: number;
+        completed: number;
+        cancelled: number;
+        cost_entered: number;
+        cost_not_entered: number;
+    };
+    financials: {
+        sales: number;
+        cost: number;
+        profit: number;
+        margin: number;
+    };
+    history: {
+        date: string;
+        sales: number;
+        cost: number;
+        profit: number;
+    }[];
+}
+
+interface RecentOrder {
+    order_sn: string;
+    order_status: string;
+    buyer_username: string;
+    total_amount: number;
+    create_time: number;
+    shop_id: number;
+    item_list: any[];
+}
+
+interface DashboardProps {
+    onViewOrder?: (order: { orderNumber: string, shopId: string, siteId: string }) => void;
+}
+
+export function Dashboard({ onViewOrder }: DashboardProps) {
     const [selectedSite, setSelectedSite] = useState('all');
     const [selectedStore, setSelectedStore] = useState('all');
-    const [startDate, setStartDate] = useState('2025-12-30');
-    const [endDate, setEndDate] = useState('2026-01-06');
+    const [selectedStatus, setSelectedStatus] = useState('all');
+    // Default to last 30 days
+    const today = new Date();
+    const thirtyDaysAgo = new Date(today);
+    thirtyDaysAgo.setDate(today.getDate() - 30);
 
-    // 站点选项
-    const sites = [
-        { value: 'all', label: '全部站点' },
-        { value: 'alibaba', label: 'Alibaba' },
-        { value: 'temu', label: 'Temu' },
-        { value: 'shopee', label: 'Shopee' },
-        { value: 'lazada', label: 'Lazada' }
-    ];
+    const [startDate, setStartDate] = useState(thirtyDaysAgo.toISOString().split('T')[0]);
+    const [endDate, setEndDate] = useState(today.toISOString().split('T')[0]);
 
-    // 店铺选项
-    const stores = [
-        { value: 'all', label: '全部店铺' },
-        { value: 'store1', label: '旗舰店' },
-        { value: 'store2', label: '专营店' },
-        { value: 'store3', label: '海外店' }
-    ];
+    const [stats, setStats] = useState<DashboardStats | null>(null);
+    const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
 
-    // 模拟数据
-    const stats = [
+    const [loading, setLoading] = useState(false);
+
+    // Pagination state
+    const [currentPage, setCurrentPage] = useState(1);
+    const [totalOrders, setTotalOrders] = useState(0);
+    const itemsPerPage = 10;
+
+    // Dynamic Sites/Shops
+    const [sites, setSites] = useState<{ value: string, label: string }[]>([]);
+    const [shops, setShops] = useState<{ value: string, label: string, siteId: string }[]>([]);
+
+    useEffect(() => {
+        // Fetch sites and shops
+        fetch('http://localhost:8000/api/shops')
+            .then(res => res.json())
+            .then(data => {
+                setSites(data.sites || []);
+                setShops(data.shops || []);
+            })
+            .catch(err => console.error("Failed to fetch shops", err));
+    }, []);
+
+    const fetchStats = async () => {
+        setLoading(true);
+        try {
+            const [startY, startM, startD] = startDate.split('-').map(Number);
+            const startTs = new Date(startY, startM - 1, startD).getTime() / 1000;
+
+            const [endY, endM, endD] = endDate.split('-').map(Number);
+            const endTs = new Date(endY, endM - 1, endD).getTime() / 1000 + 86400; // include end date
+
+            const params = new URLSearchParams({
+                time_from: startTs.toString(),
+                time_to: endTs.toString(),
+                shop_id: selectedStore,
+                site_id: selectedSite,
+                status: selectedStatus
+            });
+
+            const res = await fetch(`http://localhost:8000/api/dashboard/stats?${params.toString()}`);
+            if (res.ok) {
+                const data = await res.json();
+                setStats(data);
+            }
+
+            // Fetch Orders
+            fetchRecentOrders();
+
+        } catch (error) {
+            console.error("Failed to fetch dashboard stats", error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const fetchRecentOrders = async () => {
+        try {
+            const [startY, startM, startD] = startDate.split('-').map(Number);
+            const startTs = new Date(startY, startM - 1, startD).getTime() / 1000;
+
+            const [endY, endM, endD] = endDate.split('-').map(Number);
+            const endTs = new Date(endY, endM - 1, endD).getTime() / 1000 + 86400;
+
+            const orderParams = new URLSearchParams({
+                page: currentPage.toString(),
+                limit: itemsPerPage.toString(),
+                time_from: startTs.toString(),
+                time_to: endTs.toString()
+            });
+            if (selectedStore !== 'all') orderParams.append('shop_id', selectedStore);
+            if (selectedSite !== 'all') orderParams.append('site_id', selectedSite);
+            if (selectedStatus !== 'all') orderParams.append('status', selectedStatus);
+
+            const ordersRes = await fetch(`http://localhost:8000/api/orders?${orderParams}`);
+            if (ordersRes.ok) {
+                const ordersData = await ordersRes.json();
+                setRecentOrders(ordersData.orders || []);
+                setTotalOrders(ordersData.total || 0);
+            }
+        } catch (error) {
+            console.error("Failed to fetch recent orders", error);
+        }
+    };
+
+    // Trigger stats fetch on filters change
+    useEffect(() => {
+        setCurrentPage(1); // Reset page on filter change
+        fetchStats();
+    }, [startDate, endDate, selectedStore, selectedSite, selectedStatus]);
+
+    // Trigger orders fetch on page change
+    useEffect(() => {
+        fetchRecentOrders();
+    }, [currentPage]);
+
+    // Format currency
+    const formatCurrency = (val: number) => {
+        return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(val);
+    };
+
+    const orderStats = [
         {
             title: '总订单数',
-            value: '15',
-            change: '+12.5%',
-            trend: 'up',
+            value: stats?.orders?.total || 0,
             icon: ShoppingBag,
             color: 'blue'
         },
         {
             title: '待出货',
-            value: '0',
-            subtitle: '待付款: 0',
+            value: stats?.orders?.to_ship || 0,
             icon: Package,
             color: 'orange'
         },
         {
             title: '运送中',
-            value: '14',
-            change: '+93.3%',
-            trend: 'up',
+            value: stats?.orders?.shipping || 0,
             icon: TrendingUp,
             color: 'purple'
         },
         {
             title: '已完成',
-            value: '0',
-            subtitle: '退货/取消: 1',
+            value: stats?.orders?.completed || 0,
             icon: AlertCircle,
             color: 'green'
+        },
+        {
+            title: '退货/取消',
+            value: stats?.orders?.cancelled || 0,
+            icon: AlertCircle,
+            color: 'red'
         }
     ];
 
-    const profitStats = [
+    const financialStats = [
         {
             title: '总销售额',
-            value: '¥128,450',
-            change: '+18.2%',
-            trend: 'up',
+            value: formatCurrency(stats?.financials?.sales || 0),
             icon: DollarSign,
             color: 'green'
         },
         {
             title: '总成本',
-            value: '¥85,620',
-            change: '+15.8%',
-            trend: 'up',
+            value: formatCurrency(stats?.financials?.cost || 0),
             icon: TrendingUp,
             color: 'red'
         },
         {
             title: '总利润',
-            value: '¥42,830',
-            change: '+23.5%',
-            trend: 'up',
+            value: formatCurrency(stats?.financials?.profit || 0),
             icon: TrendingUp,
             color: 'blue'
         },
         {
             title: '利润率',
-            value: '33.4%',
-            change: '+2.1%',
-            trend: 'up',
+            value: `${(stats?.financials?.margin || 0).toFixed(1)}%`,
             icon: TrendingUp,
             color: 'purple'
         }
     ];
 
+    // Real Chart Data from Backend History
+    const chartData = (stats?.history || []).map(item => ({
+        date: item.date.substring(5), // MM-DD
+        "销售额": item.sales,
+        "成本": item.cost,
+        "利润": item.profit
+    }));
+
+    // Derived from cancelled vs total (Mock specific status breakdown)
+    // Real Status Breakdown
     const costStatusData = [
-        { name: '已录入', value: 0, color: '#22c55e' },
-        { name: '未录入', value: 15, color: '#ef4444' }
-    ];
-
-    const monthlyData = [
-        { month: '7月', 销售额: 95000, 成本: 62000, 利润: 33000 },
-        { month: '8月', 销售额: 102000, 成本: 68000, 利润: 34000 },
-        { month: '9月', 销售额: 115000, 成本: 75000, 利润: 40000 },
-        { month: '10月', 销售额: 108000, 成本: 71000, 利润: 37000 },
-        { month: '11月', 销售额: 122000, 成本: 79000, 利润: 43000 },
-        { month: '12月', 销售额: 128450, 成本: 85620, 利润: 42830 }
-    ];
-
-    const orderTrendData = [
-        { date: '12-25', 订单数: 2 },
-        { date: '12-26', 订单数: 3 },
-        { date: '12-27', 订单数: 1 },
-        { date: '12-28', 订单数: 4 },
-        { date: '12-29', 订单数: 2 },
-        { date: '12-30', 订单数: 3 },
-        { date: '01-06', 订单数: 0 }
+        { name: '已录入', value: stats?.orders?.cost_entered || 0, color: '#22c55e' },
+        { name: '未录入', value: stats?.orders?.cost_not_entered || 0, color: '#ef4444' }
     ];
 
     const getColorClass = (color: string) => {
@@ -129,68 +244,91 @@ export function Dashboard() {
         return colors[color as keyof typeof colors] || colors.blue;
     };
 
+    const getStatusInfo = (status: string) => {
+        const map: any = {
+            'UNPAID': { label: '待付款', bg: 'bg-orange-100', text: 'text-orange-600' },
+            'READY_TO_SHIP': { label: '待出货', bg: 'bg-blue-100', text: 'text-blue-600' },
+            'SHIPPED': { label: '运送中', bg: 'bg-purple-100', text: 'text-purple-600' },
+            'COMPLETED': { label: '已完成', bg: 'bg-green-100', text: 'text-green-600' },
+            'CANCELLED': { label: '已取消', bg: 'bg-red-100', text: 'text-red-600' },
+            'TO_RETURN': { label: '退货/退款', bg: 'bg-red-50', text: 'text-red-500' }
+        };
+        return map[status] || { label: status, bg: 'bg-gray-100', text: 'text-gray-600' };
+    };
+
+    const statusOptions = [
+        { value: 'all', label: '全部状态' },
+        { value: 'UNPAID', label: '待付款' },
+        { value: 'READY_TO_SHIP', label: '待出货' },
+        { value: 'SHIPPED', label: '运送中' },
+        { value: 'COMPLETED', label: '已完成' },
+        { value: 'CANCELLED', label: '退货/取消' },
+    ];
+
     return (
         <div className="p-6 space-y-6">
-            <div>
-                <h1 className="text-xl font-semibold text-gray-900">数据概览</h1>
-                <p className="text-sm text-gray-500 mt-1">实时查看订单和成本利润情况</p>
+            <div className="flex justify-between items-center">
+                <div>
+                    <h1 className="text-xl font-semibold text-gray-900">数据概览</h1>
+                    <p className="text-sm text-gray-500 mt-1">实时查看订单和成本利润情况</p>
+                </div>
+                <button
+                    onClick={fetchStats}
+                    disabled={loading}
+                    className="p-2 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"
+                >
+                    <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+                </button>
             </div>
 
             {/* 筛选区域 */}
             <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    {/* 站点选择 */}
-                    <div>
-                        <label className="block text-sm text-gray-700 mb-2">站点</label>
+                <div className="flex flex-col md:flex-row gap-4">
+                    {/* Site & Shop Selector */}
+                    <div className="flex-1">
+                        <SiteShopSelector
+                            selectedSite={selectedSite}
+                            selectedShop={selectedStore}
+                            onSiteChange={setSelectedSite}
+                            onShopChange={setSelectedStore}
+                            sites={sites}
+                            shops={shops}
+                        />
+                    </div>
+
+                    {/* Status Selector */}
+                    <div className="min-w-[120px]">
                         <select
-                            value={selectedSite}
-                            onChange={(e) => setSelectedSite(e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            value={selectedStatus}
+                            onChange={(e) => setSelectedStatus(e.target.value)}
+                            className="w-full h-10 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         >
-                            {sites.map((site) => (
-                                <option key={site.value} value={site.value}>
-                                    {site.label}
+                            {statusOptions.map(option => (
+                                <option key={option.value} value={option.value}>
+                                    {option.label}
                                 </option>
                             ))}
                         </select>
                     </div>
 
-                    {/* 店铺选择 */}
-                    <div>
-                        <label className="block text-sm text-gray-700 mb-2">店铺</label>
-                        <select
-                            value={selectedStore}
-                            onChange={(e) => setSelectedStore(e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                            {stores.map((store) => (
-                                <option key={store.value} value={store.value}>
-                                    {store.label}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    {/* 开始日期 */}
-                    <div>
-                        <label className="block text-sm text-gray-700 mb-2">开始日期</label>
-                        <input
-                            type="date"
-                            value={startDate}
-                            onChange={(e) => setStartDate(e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                    </div>
-
-                    {/* 结束日期 */}
-                    <div>
-                        <label className="block text-sm text-gray-700 mb-2">结束日期</label>
-                        <input
-                            type="date"
-                            value={endDate}
-                            onChange={(e) => setEndDate(e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
+                    {/* Date Range */}
+                    <div className="flex gap-4">
+                        <div>
+                            <input
+                                type="date"
+                                value={startDate}
+                                onChange={(e) => setStartDate(e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                        </div>
+                        <div>
+                            <input
+                                type="date"
+                                value={endDate}
+                                onChange={(e) => setEndDate(e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                        </div>
                     </div>
                 </div>
             </div>
@@ -198,8 +336,8 @@ export function Dashboard() {
             {/* 订单状态卡片 */}
             <div>
                 <h2 className="text-base font-semibold text-gray-900 mb-4">订单情况</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {stats.map((stat, index) => {
+                <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                    {orderStats.map((stat, index) => {
                         const Icon = stat.icon;
                         return (
                             <div key={index} className="bg-white rounded-lg border border-gray-200 p-5">
@@ -208,14 +346,9 @@ export function Dashboard() {
                                         <p className="text-sm text-gray-600">{stat.title}</p>
                                         <div className="flex items-baseline gap-2 mt-2">
                                             <span className="text-2xl font-semibold text-gray-900">{stat.value}</span>
-                                            {stat.change && (
-                                                <span className={`text-xs ${stat.trend === 'up' ? 'text-green-600' : 'text-red-600'}`}>
-                                                    {stat.change}
-                                                </span>
-                                            )}
                                         </div>
-                                        {stat.subtitle && (
-                                            <p className="text-xs text-gray-500 mt-1">{stat.subtitle}</p>
+                                        {(stat as any).subtitle && (
+                                            <p className="text-xs text-gray-500 mt-1">{(stat as any).subtitle}</p>
                                         )}
                                     </div>
                                     <div className={`p-3 rounded-lg ${getColorClass(stat.color)}`}>
@@ -232,7 +365,7 @@ export function Dashboard() {
             <div>
                 <h2 className="text-base font-semibold text-gray-900 mb-4">成本与利润</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {profitStats.map((stat, index) => {
+                    {financialStats.map((stat, index) => {
                         const Icon = stat.icon;
                         return (
                             <div key={index} className="bg-white rounded-lg border border-gray-200 p-5">
@@ -241,12 +374,6 @@ export function Dashboard() {
                                         <p className="text-sm text-gray-600">{stat.title}</p>
                                         <div className="flex items-baseline gap-2 mt-2">
                                             <span className="text-2xl font-semibold text-gray-900">{stat.value}</span>
-                                            {stat.change && (
-                                                <span className={`text-xs flex items-center gap-0.5 ${stat.trend === 'up' ? 'text-green-600' : 'text-red-600'}`}>
-                                                    {stat.trend === 'up' ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                                                    {stat.change}
-                                                </span>
-                                            )}
                                         </div>
                                     </div>
                                     <div className={`p-3 rounded-lg ${getColorClass(stat.color)}`}>
@@ -261,13 +388,14 @@ export function Dashboard() {
 
             {/* 图表区域 */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* 月度趋势 */}
                 <div className="lg:col-span-2 bg-white rounded-lg border border-gray-200 p-6">
-                    <h3 className="text-base font-semibold text-gray-900 mb-4">月度销售与利润趋势</h3>
+                    <div className="flex justify-between mb-4">
+                        <h3 className="text-base font-semibold text-gray-900">销售与利润趋势</h3>
+                    </div>
                     <ResponsiveContainer width="100%" height={300}>
-                        <BarChart data={monthlyData}>
+                        <BarChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                            <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                            <XAxis dataKey="date" tick={{ fontSize: 12 }} />
                             <YAxis tick={{ fontSize: 12 }} />
                             <Tooltip />
                             <Legend />
@@ -315,19 +443,133 @@ export function Dashboard() {
                 </div>
             </div>
 
-            {/* 订单趋势 */}
+            {/* Recent Orders Section */}
             <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <h3 className="text-base font-semibold text-gray-900 mb-4">近7日订单趋势</h3>
-                <ResponsiveContainer width="100%" height={250}>
-                    <LineChart data={orderTrendData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                        <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                        <YAxis tick={{ fontSize: 12 }} />
-                        <Tooltip />
-                        <Legend />
-                        <Line type="monotone" dataKey="订单数" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 4 }} />
-                    </LineChart>
-                </ResponsiveContainer>
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-base font-semibold text-gray-900">最新订单</h3>
+                </div>
+
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-gray-50 text-gray-500 font-medium">
+                            <tr>
+                                <th className="px-4 py-3 rounded-l-lg">订单号</th>
+                                <th className="px-4 py-3">订单日期</th>
+                                <th className="px-4 py-3 text-right">销售额</th>
+                                <th className="px-4 py-3 text-right">成本</th>
+                                <th className="px-4 py-3 text-right">利润</th>
+                                <th className="px-4 py-3">状态</th>
+                                <th className="px-4 py-3 rounded-r-lg text-right">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {recentOrders.length > 0 ? (
+                                recentOrders.map(order => {
+                                    const status = getStatusInfo(order.order_status);
+
+                                    // 计算预估收入和利润
+                                    const currency = order.currency || 'BRL';
+                                    const EXCHANGE_RATES: { [key: string]: number } = {
+                                        'BRL': 1.25, 'USD': 7.2, 'SGD': 5.3, 'MYR': 1.6,
+                                        'PHP': 0.13, 'IDR': 0.00046, 'THB': 0.2, 'VND': 0.00029, 'TWD': 0.23,
+                                        'CNY': 1.0
+                                    };
+                                    const rate = EXCHANGE_RATES[currency] || 1.0;
+
+                                    // 计算商品总额
+                                    const itemList = order.item_list || [];
+                                    const itemTotal = itemList.reduce((sum: number, item: any) =>
+                                        sum + (item.model_discounted_price || 0) * (item.model_quantity_purchased || 0), 0
+                                    );
+
+                                    // 从financials获取费用和运费信息
+                                    const financials = order.financials || {};
+                                    const estimatedShippingFee = financials.actual_shipping_fee || 0;
+                                    const buyerPaidShipping = financials.buyer_paid_shipping || 0;
+                                    const shopeeShippingRebate = financials.shopee_shipping_rebate || 0;
+
+                                    // 预估运费 = 买家支付运费 - 物流费 + Shopee运费回扣
+                                    const estimatedShipping = buyerPaidShipping - estimatedShippingFee + shopeeShippingRebate;
+
+                                    // 总费用
+                                    const totalFees = financials.total_fees || 0;
+
+                                    // 预估订单收入 - 优先使用后端返回的准确值
+                                    const estimatedRevenue = financials.order_income !== undefined
+                                        ? financials.order_income
+                                        : (itemTotal + estimatedShipping - totalFees);
+
+                                    // 转换为人民币
+                                    const salesCNY = order.total_amount * rate;
+                                    const revenueCNY = estimatedRevenue * rate;
+                                    const cost = order.total_cost || 0;
+                                    const profit = revenueCNY - cost;
+
+                                    return (
+                                        <tr key={order.order_sn} className="hover:bg-gray-50 transition-colors">
+                                            <td className="px-4 py-4">
+                                                <span className="font-semibold text-gray-900">{order.order_sn}</span>
+                                            </td>
+                                            <td className="px-4 py-4">
+                                                <span className="text-gray-700">
+                                                    {new Date(order.create_time * 1000).toLocaleDateString('zh-CN')}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-4 text-right font-medium text-gray-900">
+                                                ¥{salesCNY.toFixed(2)}
+                                            </td>
+                                            <td className="px-4 py-4 text-right font-medium text-orange-600">
+                                                ¥{cost.toFixed(2)}
+                                            </td>
+                                            <td className="px-4 py-4 text-right font-medium">
+                                                <span className={profit >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                                    ¥{profit.toFixed(2)}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-4">
+                                                <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${status.bg} ${status.text}`}>
+                                                    {status.label}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-4 text-right">
+                                                <button
+                                                    onClick={() => onViewOrder && onViewOrder({
+                                                        orderNumber: order.order_sn,
+                                                        shopId: String(order.shop_id),
+                                                        siteId: shops.find(s => s.value === String(order.shop_id))?.siteId || ''
+                                                    })}
+                                                    className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 font-medium"
+                                                >
+                                                    查看
+                                                    <ChevronRight className="w-4 h-4" />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            ) : (
+                                <tr>
+                                    <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                                        暂无订单数据
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+
+                {/* Pagination */}
+                {totalOrders > itemsPerPage && (
+                    <div className="mt-4 border-t border-gray-100 pt-4">
+                        <Pagination
+                            currentPage={currentPage}
+                            totalPages={Math.ceil(totalOrders / itemsPerPage)}
+                            totalItems={totalOrders}
+                            itemsPerPage={itemsPerPage}
+                            onPageChange={setCurrentPage}
+                        />
+                    </div>
+                )}
             </div>
         </div>
     );

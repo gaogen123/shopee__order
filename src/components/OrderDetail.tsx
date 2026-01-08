@@ -42,6 +42,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
     if (value === '' || /^\d*\.?\d{0,2}$/.test(value)) {
       setItemCosts(prev => ({ ...prev, [itemId]: value }));
       setPurchaseTotalOverride(null); // 修改明细时清除总额覆盖
+      setTotalCostOverride(null); // 允许自动计算总成本
     }
   };
 
@@ -49,6 +50,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
   const handlePurchaseTotalChange = (value: string) => {
     if (value === '' || /^\d*\.?\d{0,2}$/.test(value)) {
       setPurchaseTotalOverride(value);
+      setTotalCostOverride(null); // 允许自动计算总成本
     }
   };
 
@@ -56,6 +58,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
   const handleDomesticLogisticsCostChange = (value: string) => {
     if (value === '' || /^\d*\.?\d{0,2}$/.test(value)) {
       setDomesticLogisticsCost(value);
+      setTotalCostOverride(null); // 允许自动计算总成本
     }
   };
 
@@ -193,7 +196,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
             commission: data.financials?.commission_fee || 0,
             serviceFee: data.financials?.service_fee || 0,
             transactionFee: data.financials?.seller_transaction_fee || 0,
-            estimatedRevenue: (calculatedItemTotal + ((data.financials?.estimated_shipping_fee || 0) - (data.escrow_info?.actual_shipping_fee || data.actual_shipping_fee || 0))) - (data.financials?.total_fees || 0),
+            estimatedRevenue: data.escrow_info?.order_income_amount !== undefined ? data.escrow_info.order_income_amount : ((calculatedItemTotal + ((data.financials?.estimated_shipping_fee || 0) - (data.escrow_info?.actual_shipping_fee || data.actual_shipping_fee || 0))) - (data.financials?.total_fees || 0)),
           },
           buyerPayment: {
             itemTotal: calculatedItemTotal, // Use calculated item total
@@ -281,7 +284,8 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
       const payload = [{
         item_id: itemId,
         model_id: item?.modelId || 0,
-        sourcing_price: price
+        sourcing_price: price,
+        purchase_cost: price
       }];
 
       await fetch(`http://localhost:8000/api/order/${order.orderNo}/items/cost`, {
