@@ -13,6 +13,7 @@ import { OrderDetail } from "./components/OrderDetail";
 import { Checkbox } from "./components/ui/checkbox";
 import { toast } from "sonner@2.0.3";
 import { Toaster } from "./components/ui/sonner";
+import { Dashboard } from "./components/Dashboard";
 
 // Mock data for orders
 const mockOrders: Order[] = [
@@ -475,7 +476,7 @@ import { Sidebar } from "./components/Sidebar";
 // ... (existing helper function nearby, handled via imports)
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<'orders' | 'mappings'>('orders');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'orders' | 'mappings'>('dashboard');
   const [searchQuery, setSearchQuery] = useState("");
   const [dateRange, setDateRange] = useState("2025-12-30 至 2026-01-06");
   const [showFilters, setShowFilters] = useState(false);
@@ -1300,6 +1301,11 @@ export default function App() {
                 </div>
               )}
             </div>
+          </div>
+        ) : currentView === 'dashboard' ? (
+          /* Dashboard View */
+          <div className="flex-1 overflow-y-auto">
+            <Dashboard />
           </div>
         ) : (
           /* Mappings View */

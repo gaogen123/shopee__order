@@ -1,9 +1,9 @@
-import { LayoutGrid, Package } from "lucide-react";
+import { LayoutGrid, Package, BarChart2 } from "lucide-react";
 import { cn } from "./ui/utils";
 
 interface SidebarProps {
-    activeTab: 'orders' | 'mappings';
-    onTabChange: (tab: 'orders' | 'mappings') => void;
+    activeTab: 'dashboard' | 'orders' | 'mappings';
+    onTabChange: (tab: 'dashboard' | 'orders' | 'mappings') => void;
 }
 
 export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
@@ -16,6 +16,20 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
             </div>
 
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+                <button
+                    onClick={() => onTabChange('dashboard')}
+                    className={cn(
+                        "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium text-sm",
+                        activeTab === 'dashboard'
+                            ? "bg-blue-600 text-white shadow-lg shadow-blue-900/20"
+                            : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    )}
+                    style={activeTab === 'dashboard' ? { backgroundColor: '#2563eb', color: 'white' } : {}}
+                >
+                    <BarChart2 className={cn("w-5 h-5", activeTab === 'dashboard' ? "text-white" : "text-gray-400")} />
+                    数据概览
+                </button>
+
                 <button
                     onClick={() => onTabChange('orders')}
                     className={cn(
