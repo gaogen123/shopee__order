@@ -17,6 +17,7 @@ interface OrderSummary {
     create_time: number;
     item_list: Array<{
         item_id: number;
+        order_item_id?: number;
         item_name: string;
         image_info?: { image_url: string };
         model_id?: number;
