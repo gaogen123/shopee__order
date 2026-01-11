@@ -351,7 +351,8 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
         },
         {
             title: '总成本',
-            value: formatCurrency(stats?.financials?.cost || 0),
+            // 总成本显示为人民币（用户录入成本以人民币计）
+            value: `¥${(stats?.financials?.cost || 0).toFixed(2)}`,
             icon: TrendingUp,
             color: 'red'
         },
