@@ -242,6 +242,10 @@ def update_item_costs(order_sn: str, updates: list[ItemCostUpdate]):
 def get_orders(
     status: str = Query(None),
     keyword: str = Query(None),
+    shop_id: int = Query(None, description="店铺ID筛选，可选"),
+    site_id: str = Query(None, description="站点ID筛选，可选"),
+    time_from: int = Query(None, description="创建时间起始时间戳(Unix)，可选"),
+    time_to: int = Query(None, description="创建时间结束时间戳(Unix)，可选"),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100)
 ):
@@ -265,6 +269,16 @@ def get_orders(
     where_clauses = []
     params = []
 
+    # 店铺ID筛选条件
+    if shop_id is not None:
+        where_clauses.append("shop_id = ?")
+        params.append(shop_id)
+
+    # 站点ID筛选条件
+    if site_id is not None:
+        where_clauses.append("site_id = ?")
+        params.append(site_id)
+
     # 状态筛选条件
     if status and status != 'ALL':
         if status == 'CANCELLED':
@@ -274,6 +288,14 @@ def get_orders(
             # 其他状态直接匹配
             where_clauses.append("order_status = ?")
             params.append(status)
+
+    # 时间范围筛选条件
+    if time_from is not None:
+        where_clauses.append("create_time >= ?")
+        params.append(time_from)
+    if time_to is not None:
+        where_clauses.append("create_time <= ?")
+        params.append(time_to)
 
     # 关键词搜索条件（订单号或买家用户名）
     if keyword:
@@ -434,23 +456,27 @@ def get_orders(
 @router.get("/api/orders/stats")
 def get_order_stats(
     shop_id: int = Query(None, description="店铺ID筛选，可选"),
+    site_id: str = Query(None, description="站点ID筛选，可选"),
+    status: str = Query(None, description="订单状态筛选，可选"),
     start_time: int = Query(None, description="创建时间起始时间戳(Unix)，可选"),
     end_time: int = Query(None, description="创建时间结束时间戳(Unix)，可选")
 ):
     """
     获取订单统计信息，按照前端友好的状态分组统计订单数量
 
-    支持按店铺ID和创建时间范围进行筛选，用于生成订单状态分布图表
+    支持按店铺ID、站点ID、状态和创建时间范围进行筛选，用于生成订单状态分布图表
 
     Args:
         shop_id (int, optional): 店铺ID，用于筛选特定店铺的订单统计
+        site_id (str, optional): 站点ID，用于筛选特定站点的订单统计
+        status (str, optional): 订单状态，用于筛选特定状态的订单
         start_time (int, optional): Unix时间戳，筛选创建时间大于等于此时间的订单
         end_time (int, optional): Unix时间戳，筛选创建时间小于等于此时间的订单
 
     Returns:
         dict: 包含分组统计和原始状态分布的响应
             - counts: 按前端状态分组的统计结果
-            - raw_breakdown: 原始Shopee状态的分布统计
+            - raw_breakdown: 原始状态分布统计
     """
     # 建立数据库连接并初始化表结构
     conn = get_db_connection()
@@ -461,10 +487,46 @@ def get_order_stats(
     where_clauses = []
     params = []
 
+    # 站点筛选条件 - 需要通过shop_id间接实现
+    if site_id is not None and site_id != 'all':
+        # 导入店铺配置来获取站点下的店铺ID列表
+        import sys
+        from pathlib import Path
+        TEST_DIR = Path(__file__).resolve().parent.parent / "test" / "shop_test"
+        if str(TEST_DIR) not in sys.path:
+            sys.path.append(str(TEST_DIR))
+
+        from token_manager import ALL_SHOPS
+
+        # 获取指定站点下的所有店铺ID
+        site_shop_ids = []
+        for shop in ALL_SHOPS:
+            if shop.get('region') == site_id:
+                site_shop_ids.append(shop['id'])
+
+        if site_shop_ids:
+            placeholders = ','.join('?' * len(site_shop_ids))
+            where_clauses.append(f"shop_id IN ({placeholders})")
+            params.extend(site_shop_ids)
+        else:
+            # 如果站点下没有店铺，返回空结果
+            return {
+                "counts": {
+                    "all": 0, "pending": 0, "processing": 0, "shipped": 0,
+                    "completed": 0, "cancelled": 0, "other": 0
+                },
+                "raw_breakdown": {}
+            }
+
     # 店铺筛选条件
     if shop_id is not None:
         where_clauses.append("shop_id = ?")
         params.append(shop_id)
+
+    # 状态筛选条件 - 直接使用Shopee原始状态
+    if status is not None and status != 'all':
+        where_clauses.append("order_status = ?")
+        params.append(status)
 
     # 时间范围筛选条件
     if start_time is not None:
@@ -485,57 +547,228 @@ def get_order_stats(
     c.execute(f"SELECT order_status, count(*) as cnt FROM orders WHERE {where_str} GROUP BY order_status", params)
     rows = c.fetchall()
 
-    # Shopee原始状态到前端状态的映射
-    # 将Shopee的多种状态归类为前端友好的状态分组
-    status_map = {
-        'UNPAID': 'pending',           # 未支付 -> 待处理
-        'READY_TO_SHIP': 'processing', # 准备发货 -> 处理中
-        'PROCESSED': 'processing',     # 已处理 -> 处理中
-        'RETRY_SHIP': 'processing',    # 重试发货 -> 处理中
-        'SHIPPED': 'shipped',          # 已发货 -> 已发货
-        'TO_CONFIRM_RECEIVE': 'shipped', # 待确认收货 -> 已发货
-        'COMPLETED': 'completed',      # 已完成 -> 已完成
-        'IN_CANCEL': 'cancelled',      # 取消中 -> 已取消
-        'CANCELLED': 'cancelled',      # 已取消 -> 已取消
-        'TO_RETURN': 'cancelled'       # 退货中 -> 已取消
-    }
+    # 直接返回Shopee原始状态的统计
+    status_counts = {}
 
-    # 初始化前端状态统计结果
-    counts = {
-        'all': total,        # 全部订单
-        'pending': 0,        # 待处理
-        'processing': 0,     # 处理中
-        'shipped': 0,        # 已发货
-        'completed': 0,      # 已完成
-        'cancelled': 0,      # 已取消
-        'other': 0           # 其他状态
-    }
-
-    # 原始状态分布统计
-    raw_breakdown = {}
-
-    # 处理分组统计结果
+    # 处理统计结果
     for r in rows:
         # 获取原始状态和数量
         raw_status = r['order_status'] if r['order_status'] is not None else 'UNKNOWN'
         cnt = r['cnt'] if 'cnt' in r.keys() else r[1]
 
-        # 记录原始状态分布
-        raw_breakdown[raw_status] = cnt
-
-        # 将原始状态映射到前端状态并累加计数
-        mapped = status_map.get(raw_status)
-        if mapped:
-            counts[mapped] = counts.get(mapped, 0) + cnt
-        else:
-            # 未映射的状态归类为"其他"
-            counts['other'] = counts.get('other', 0) + cnt
+        # 记录每个原始状态的数量
+        status_counts[raw_status] = cnt
 
     # 关闭数据库连接
     conn.close()
 
     # 返回统计结果
     return {
-        "counts": counts,           # 前端状态分组统计
-        "raw_breakdown": raw_breakdown  # 原始状态分布统计
+        "total": total,             # 总订单数
+        "status_counts": status_counts  # 各状态订单数
+    }
+
+@router.get("/api/dashboard/financials")
+def get_dashboard_financials(
+    shop_id: int = Query(None, description="店铺ID筛选，可选"),
+    site_id: str = Query(None, description="站点ID筛选，可选"),
+    status: str = Query(None, description="订单状态筛选，可选"),
+    start_time: int = Query(None, description="创建时间起始时间戳(Unix)，可选"),
+    end_time: int = Query(None, description="创建时间结束时间戳(Unix)，可选")
+):
+    """
+    获取仪表板财务统计信息，包括销售额、成本、利润等
+
+    Args:
+        shop_id (int, optional): 店铺ID，用于筛选特定店铺的财务统计
+        site_id (str, optional): 站点ID，用于筛选特定站点的财务统计
+        status (str, optional): 订单状态，用于筛选特定状态的订单
+        start_time (int, optional): Unix时间戳，筛选创建时间大于等于此时间的订单
+        end_time (int, optional): Unix时间戳，筛选创建时间小于等于此时间的订单
+
+    Returns:
+        dict: 包含财务统计数据的响应
+    """
+    # 建立数据库连接并初始化表结构
+    conn = get_db_connection()
+    init_db_tables(conn)
+    c = conn.cursor()
+
+    # 构建查询条件
+    where_clauses = []
+    params = []
+
+    # 站点筛选条件 - 需要通过shop_id间接实现
+    if site_id is not None and site_id != 'all':
+        # 导入店铺配置来获取站点下的店铺ID列表
+        import sys
+        from pathlib import Path
+        TEST_DIR = Path(__file__).resolve().parent.parent / "test" / "shop_test"
+        if str(TEST_DIR) not in sys.path:
+            sys.path.append(str(TEST_DIR))
+
+        from token_manager import ALL_SHOPS
+
+        # 获取指定站点下的所有店铺ID
+        site_shop_ids = []
+        for shop in ALL_SHOPS:
+            if shop.get('region') == site_id:
+                site_shop_ids.append(shop['id'])
+
+        if site_shop_ids:
+            placeholders = ','.join('?' * len(site_shop_ids))
+            where_clauses.append(f"o.shop_id IN ({placeholders})")
+            params.extend(site_shop_ids)
+        else:
+            # 如果站点下没有店铺，返回空结果
+            return {
+                "financials": {"sales": 0, "cost": 0, "profit": 0, "margin": 0},
+                "summary": {"total_orders": 0, "avg_order_value": 0, "orders_with_cost": 0, "items_with_cost": 0, "total_items": 0},
+                "history": []
+            }
+
+    # 店铺筛选条件
+    if shop_id is not None:
+        where_clauses.append("o.shop_id = ?")
+        params.append(shop_id)
+
+    # 状态筛选条件 - 直接使用Shopee原始状态
+    if status is not None and status != 'all':
+        where_clauses.append("o.order_status = ?")
+        params.append(status)
+
+    # 时间范围筛选条件
+    if start_time is not None:
+        where_clauses.append("o.create_time >= ?")
+        params.append(start_time)
+    if end_time is not None:
+        where_clauses.append("o.create_time <= ?")
+        params.append(end_time)
+
+    # 构建WHERE子句
+    where_str = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+    # 计算财务统计
+    # 1. 总销售额 (total_amount)
+    c.execute(f"""
+        SELECT
+            SUM(o.total_amount) as total_sales,
+            COUNT(*) as order_count,
+            AVG(o.total_amount) as avg_order_value
+        FROM orders o
+        WHERE {where_str}
+    """, params)
+    sales_row = c.fetchone()
+    total_sales = sales_row['total_sales'] or 0
+    order_count = sales_row['order_count'] or 0
+    avg_order_value = sales_row['avg_order_value'] or 0
+
+    # 2. 总成本 (从订单级别成本 + 商品级别成本计算)
+    c.execute(f"""
+        SELECT
+            SUM(COALESCE(o.total_cost, 0)) as order_level_cost,
+            SUM(COALESCE(ouc.purchase_cost * ouc.quantity, 0)) as item_purchase_cost,
+            SUM(COALESCE(ouc.domestic_shipping_cost * ouc.quantity, 0)) as item_shipping_cost
+        FROM orders o
+        LEFT JOIN (
+            SELECT
+                ouic.order_sn,
+                ouic.item_id,
+                ouic.model_id,
+                ouic.purchase_cost,
+                ouic.domestic_shipping_cost,
+                oi.model_quantity_purchased as quantity
+            FROM order_item_user_costs ouic
+            JOIN order_items oi ON ouic.order_sn = oi.order_sn
+                AND ouic.item_id = oi.item_id
+                AND ouic.model_id = oi.model_id
+        ) ouc ON o.order_sn = ouc.order_sn
+        WHERE {where_str}
+        GROUP BY o.order_sn
+    """, params)
+
+    # 由于上面的查询返回多行，我们需要聚合
+    total_cost = 0
+    cost_rows = c.fetchall()
+    for row in cost_rows:
+        order_cost = row['order_level_cost'] or 0
+        item_cost = (row['item_purchase_cost'] or 0) + (row['item_shipping_cost'] or 0)
+        total_cost += order_cost + item_cost
+
+    # 3. 计算利润 (销售额 - 成本)
+    total_profit = total_sales - total_cost
+    profit_margin = (total_profit / total_sales * 100) if total_sales > 0 else 0
+
+    # 4. 成本录入统计
+    c.execute(f"""
+        SELECT
+            COUNT(DISTINCT CASE WHEN o.total_cost > 0 THEN o.order_sn END) as orders_with_cost,
+            COUNT(DISTINCT o.order_sn) as total_orders,
+            COUNT(DISTINCT CASE WHEN ouic.purchase_cost > 0 THEN CONCAT(o.order_sn, '-', ouic.item_id) END) as items_with_cost,
+            COUNT(DISTINCT CONCAT(o.order_sn, '-', oi.item_id)) as total_items
+        FROM orders o
+        LEFT JOIN order_items oi ON o.order_sn = oi.order_sn
+        LEFT JOIN order_item_user_costs ouic ON o.order_sn = ouic.order_sn
+            AND oi.item_id = ouic.item_id
+            AND oi.model_id = ouic.model_id
+        WHERE {where_str}
+    """, params)
+    cost_stats = c.fetchone()
+    orders_with_cost = cost_stats['orders_with_cost'] or 0
+    total_orders = cost_stats['total_orders'] or 0
+    items_with_cost = cost_stats['items_with_cost'] or 0
+    total_items = cost_stats['total_items'] or 0
+
+    # 5. 历史趋势数据 (按日期分组)
+    c.execute(f"""
+        SELECT
+            DATE(o.create_time, 'unixepoch', 'localtime') as date,
+            COUNT(*) as order_count,
+            SUM(o.total_amount) as daily_sales,
+            SUM(COALESCE(o.total_cost, 0) +
+                COALESCE(ouc.purchase_cost * oi.model_quantity_purchased, 0) +
+                COALESCE(ouc.domestic_shipping_cost * oi.model_quantity_purchased, 0)) as daily_cost
+        FROM orders o
+        LEFT JOIN order_items oi ON o.order_sn = oi.order_sn
+        LEFT JOIN order_item_user_costs ouc ON o.order_sn = ouc.order_sn
+            AND oi.item_id = ouc.item_id
+            AND oi.model_id = ouc.model_id
+        WHERE {where_str}
+        GROUP BY DATE(o.create_time, 'unixepoch', 'localtime')
+        ORDER BY date DESC
+        LIMIT 30
+    """, params)
+
+    history_data = []
+    for row in c.fetchall():
+        daily_sales = row['daily_sales'] or 0
+        daily_cost = row['daily_cost'] or 0
+        daily_profit = daily_sales - daily_cost
+        history_data.append({
+            'date': row['date'],
+            'sales': daily_sales,
+            'cost': daily_cost,
+            'profit': daily_profit
+        })
+
+    # 关闭数据库连接
+    conn.close()
+
+    # 返回财务统计结果
+    return {
+        "financials": {
+            "sales": total_sales,
+            "cost": total_cost,
+            "profit": total_profit,
+            "margin": profit_margin
+        },
+        "summary": {
+            "total_orders": order_count,
+            "avg_order_value": avg_order_value,
+            "orders_with_cost": orders_with_cost,
+            "total_orders": total_orders,
+            "items_with_cost": items_with_cost,
+            "total_items": total_items
+        },
+        "history": history_data
     }

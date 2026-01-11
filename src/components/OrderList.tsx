@@ -141,7 +141,7 @@ export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSave
             if (selectedSite !== 'all') params.append('site_id', selectedSite);
             if (selectedShop !== 'all') params.append('shop_id', selectedShop);
 
-            const res = await fetch(`http://localhost:8000/api/orders?${params}`);
+            const res = await fetch(`http://localhost:9000/api/orders?${params}`);
             const data = await res.json();
 
             setOrders(data.orders || []);
@@ -158,8 +158,8 @@ export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSave
         const fetchMappingsAndShops = async () => {
             try {
                 const [mappingsRes, shopsRes] = await Promise.all([
-                    fetch('http://localhost:8000/api/mappings'),
-                    fetch('http://localhost:8000/api/shops')
+                    fetch('http://localhost:9000/api/mappings'),
+                    fetch('http://localhost:9000/api/shops')
                 ]);
                 const mappingsData = await mappingsRes.json();
                 const shopsData = await shopsRes.json();
@@ -180,7 +180,7 @@ export function OrderList({ onSelectOrder, onSync, onSyncSelected, onMappingSave
 
     const handleMappingSaved = () => {
         // Refresh mappings
-        fetch('http://localhost:8000/api/mappings')
+        fetch('http://localhost:9000/api/mappings')
             .then(res => res.json())
             .then(data => setMappings(data))
             .catch(console.error);
@@ -437,7 +437,7 @@ function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved, 
         // Auto-save on blur
         setSaving(true);
         try {
-            await fetch(`http://localhost:8000/api/order/${order.order_sn}/item/cost`, {
+            await fetch(`http://localhost:9000/api/order/${order.order_sn}/item/cost`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -464,7 +464,7 @@ function OrderCard({ order, onSelect, selected, onToggleSelect, onMappingSaved, 
 
         setSaving(true);
         try {
-            await fetch(`http://localhost:8000/api/mappings/save`, {
+            await fetch(`http://localhost:9000/api/mappings/save`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

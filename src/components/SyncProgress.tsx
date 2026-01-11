@@ -47,7 +47,7 @@ export function SyncProgress({ isVisible, taskId, onComplete }: SyncProgressProp
 
     const pollStatus = async () => {
       try {
-        const res = await fetch(`http://localhost:8000/api/sync/status/${taskId}`);
+        const res = await fetch(`http://localhost:9000/api/sync/status/${taskId}`);
         if (!res.ok) throw new Error("Status check failed");
 
         const data = await res.json();

@@ -1,6 +1,7 @@
 import { TrendingUp, TrendingDown, ShoppingBag, DollarSign, Package, AlertCircle, RefreshCw, ChevronRight } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useState, useEffect } from 'react';
+import { flushSync } from 'react-dom';
 import { SiteShopSelector } from './SiteShopSelector';
 import { Pagination } from './Pagination';
 
@@ -71,7 +72,7 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
 
     useEffect(() => {
         // Fetch sites and shops
-        fetch('http://localhost:8000/api/shops')
+        fetch('http://localhost:9000/api/shops')
             .then(res => res.json())
             .then(data => {
                 setSites(data.sites || []);
@@ -97,10 +98,97 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                 status: selectedStatus
             });
 
-            const res = await fetch(`http://localhost:8000/api/dashboard/stats?${params.toString()}`);
-            if (res.ok) {
-                const data = await res.json();
-                setStats(data);
+            // 构建筛选参数
+            const statsParams = new URLSearchParams({
+                start_time: startTs.toString(),
+                end_time: endTs.toString()
+            });
+
+            // 应用店铺筛选
+            if (selectedStore !== 'all') {
+                statsParams.append('shop_id', parseInt(selectedStore));
+            }
+
+            // 应用站点筛选
+            if (selectedSite !== 'all') {
+                statsParams.append('site_id', selectedSite);
+            }
+
+            // 应用状态筛选
+            if (selectedStatus !== 'all') {
+                statsParams.append('status', selectedStatus);
+            }
+
+            // 获取订单统计
+            const statsRes = await fetch(`http://localhost:9000/api/orders/stats?${statsParams.toString()}`);
+            let statsData = null;
+            if (statsRes.ok) {
+                statsData = await statsRes.json();
+            }
+
+            // 获取财务统计
+            const financialsRes = await fetch(`http://localhost:9000/api/dashboard/financials?${statsParams.toString()}`);
+            let financialsData = null;
+            if (financialsRes.ok) {
+                financialsData = await financialsRes.json();
+            }
+
+            // 合并数据
+            if (statsData || financialsData) {
+                const newStats = {
+                    orders: {
+                        total: statsData?.total || 0,
+                        // 直接使用Shopee状态，不进行映射
+                        UNPAID: statsData?.status_counts?.UNPAID || 0,
+                        READY_TO_SHIP: statsData?.status_counts?.READY_TO_SHIP || 0,
+                        PROCESSED: statsData?.status_counts?.PROCESSED || 0,
+                        RETRY_SHIP: statsData?.status_counts?.RETRY_SHIP || 0,
+                        SHIPPED: statsData?.status_counts?.SHIPPED || 0,
+                        TO_CONFIRM_RECEIVE: statsData?.status_counts?.TO_CONFIRM_RECEIVE || 0,
+                        COMPLETED: statsData?.status_counts?.COMPLETED || 0,
+                        IN_CANCEL: statsData?.status_counts?.IN_CANCEL || 0,
+                        CANCELLED: statsData?.status_counts?.CANCELLED || 0,
+                        TO_RETURN: statsData?.status_counts?.TO_RETURN || 0,
+                        cost_entered: financialsData?.summary?.orders_with_cost || 0,
+                        cost_not_entered: (financialsData?.summary?.total_orders || 0) - (financialsData?.summary?.orders_with_cost || 0)
+                    },
+                    financials: {
+                        sales: financialsData?.financials?.sales || 0,
+                        cost: financialsData?.financials?.cost || 0,
+                        profit: financialsData?.financials?.profit || 0,
+                        margin: financialsData?.financials?.margin || 0
+                    },
+                    history: financialsData?.history || []
+                };
+                flushSync(() => {
+                    setStats(newStats);
+                });
+            } else {
+                // 如果都没有数据，设置默认空状态
+                setStats({
+                    orders: {
+                        total: 0,
+                        UNPAID: 0,
+                        READY_TO_SHIP: 0,
+                        PROCESSED: 0,
+                        RETRY_SHIP: 0,
+                        SHIPPED: 0,
+                        TO_CONFIRM_RECEIVE: 0,
+                        COMPLETED: 0,
+                        IN_CANCEL: 0,
+                        CANCELLED: 0,
+                        TO_RETURN: 0,
+                        cost_entered: 0,
+                        cost_not_entered: 0
+                    },
+                    financials: {
+                        sales: 0,
+                        cost: 0,
+                        profit: 0,
+                        margin: 0
+                    },
+                    history: []
+                });
             }
 
             // Fetch Orders
@@ -123,15 +211,15 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
 
             const orderParams = new URLSearchParams({
                 page: currentPage.toString(),
-                limit: itemsPerPage.toString(),
-                time_from: startTs.toString(),
-                time_to: endTs.toString()
+                limit: itemsPerPage.toString()
             });
+            if (startTs) orderParams.append('time_from', startTs.toString());
+            if (endTs) orderParams.append('time_to', endTs.toString());
             if (selectedStore !== 'all') orderParams.append('shop_id', selectedStore);
             if (selectedSite !== 'all') orderParams.append('site_id', selectedSite);
             if (selectedStatus !== 'all') orderParams.append('status', selectedStatus);
 
-            const ordersRes = await fetch(`http://localhost:8000/api/orders?${orderParams}`);
+            const ordersRes = await fetch(`http://localhost:9000/api/orders?${orderParams}`);
             if (ordersRes.ok) {
                 const ordersData = await ordersRes.json();
                 setRecentOrders(ordersData.orders || []);
@@ -148,10 +236,11 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
         fetchStats();
     }, [startDate, endDate, selectedStore, selectedSite, selectedStatus]);
 
-    // Trigger orders fetch on page change
+    // Trigger orders fetch on page change or filters change
     useEffect(() => {
         fetchRecentOrders();
-    }, [currentPage]);
+    }, [currentPage, startDate, endDate, selectedStore, selectedSite, selectedStatus]);
+
 
     // Format currency
     const formatCurrency = (val: number) => {
@@ -166,26 +255,62 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
             color: 'blue'
         },
         {
-            title: '待出货',
-            value: stats?.orders?.to_ship || 0,
+            title: '未支付',
+            value: stats?.orders?.UNPAID || 0,
             icon: Package,
             color: 'orange'
         },
         {
-            title: '运送中',
-            value: stats?.orders?.shipping || 0,
+            title: '准备发货',
+            value: stats?.orders?.READY_TO_SHIP || 0,
             icon: TrendingUp,
             color: 'purple'
         },
         {
-            title: '已完成',
-            value: stats?.orders?.completed || 0,
+            title: '已处理',
+            value: stats?.orders?.PROCESSED || 0,
             icon: AlertCircle,
             color: 'green'
         },
         {
-            title: '退货/取消',
-            value: stats?.orders?.cancelled || 0,
+            title: '重试发货',
+            value: stats?.orders?.RETRY_SHIP || 0,
+            icon: AlertCircle,
+            color: 'red'
+        },
+        {
+            title: '已发货',
+            value: stats?.orders?.SHIPPED || 0,
+            icon: TrendingUp,
+            color: 'blue'
+        },
+        {
+            title: '待确认收货',
+            value: stats?.orders?.TO_CONFIRM_RECEIVE || 0,
+            icon: AlertCircle,
+            color: 'orange'
+        },
+        {
+            title: '已完成',
+            value: stats?.orders?.COMPLETED || 0,
+            icon: AlertCircle,
+            color: 'green'
+        },
+        {
+            title: '取消中',
+            value: stats?.orders?.IN_CANCEL || 0,
+            icon: AlertCircle,
+            color: 'red'
+        },
+        {
+            title: '已取消',
+            value: stats?.orders?.CANCELLED || 0,
+            icon: AlertCircle,
+            color: 'red'
+        },
+        {
+            title: '退货中',
+            value: stats?.orders?.TO_RETURN || 0,
             icon: AlertCircle,
             color: 'red'
         }
@@ -258,11 +383,16 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
 
     const statusOptions = [
         { value: 'all', label: '全部状态' },
-        { value: 'UNPAID', label: '待付款' },
-        { value: 'READY_TO_SHIP', label: '待出货' },
-        { value: 'SHIPPED', label: '运送中' },
+        { value: 'UNPAID', label: '未支付' },
+        { value: 'READY_TO_SHIP', label: '准备发货' },
+        { value: 'PROCESSED', label: '已处理' },
+        { value: 'RETRY_SHIP', label: '重试发货' },
+        { value: 'SHIPPED', label: '已发货' },
+        { value: 'TO_CONFIRM_RECEIVE', label: '待确认收货' },
         { value: 'COMPLETED', label: '已完成' },
-        { value: 'CANCELLED', label: '退货/取消' },
+        { value: 'IN_CANCEL', label: '取消中' },
+        { value: 'CANCELLED', label: '已取消' },
+        { value: 'TO_RETURN', label: '退货中' },
     ];
 
     return (
@@ -446,7 +576,7 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
             {/* Recent Orders Section */}
             <div className="bg-white rounded-lg border border-gray-200 p-6">
                 <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-base font-semibold text-gray-900">最新订单</h3>
+                    <h3 className="text-base font-semibold text-gray-900">订单详情</h3>
                 </div>
 
                 <div className="overflow-x-auto">

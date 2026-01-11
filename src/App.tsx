@@ -491,7 +491,7 @@ export default function App() {
   const [shopOptions, setShopOptions] = useState<{ value: string, label: string, siteId: string }[]>([]);
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/shops')
+    fetch('http://localhost:9000/api/shops')
       .then(res => res.json())
       .then(data => {
         if (data.sites) setSiteOptions(data.sites);
@@ -519,7 +519,7 @@ export default function App() {
   // Fetch orders from API
   const fetchOrders = () => {
     setIsLoadingOrders(true);
-    fetch('http://localhost:8000/api/orders?limit=100')
+    fetch('http://localhost:9000/api/orders?limit=100')
       .then(res => res.json())
       .then(data => {
         if (data.orders) {
@@ -900,7 +900,7 @@ export default function App() {
     const order = orders.find(o => o.id === orderId);
     const item = order?.items.find(i => i.id === itemId);
     if (order && item) {
-      fetch(`http://localhost:8000/api/order/${orderId}/items/cost`, {
+      fetch(`http://localhost:9000/api/order/${orderId}/items/cost`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify([{
@@ -925,7 +925,7 @@ export default function App() {
     );
 
     // 保存到数据库
-    fetch(`http://localhost:8000/api/order/${orderId}/cost`, {
+    fetch(`http://localhost:9000/api/order/${orderId}/cost`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ total_cost: totalCost })
@@ -962,7 +962,7 @@ export default function App() {
     const timeTo = Math.floor(toDate.getTime() / 1000);
 
     // Call API
-    fetch('http://localhost:8000/api/sync_orders', {
+    fetch('http://localhost:9000/api/sync_orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1060,7 +1060,7 @@ export default function App() {
       return;
     }
 
-    fetch('http://localhost:8000/api/sync_batch', {
+    fetch('http://localhost:9000/api/sync_batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: itemsToSync })

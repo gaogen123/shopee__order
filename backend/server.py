@@ -81,5 +81,5 @@ if __name__ == "__main__":
     conn.close()
     print("Database tables initialized")
     import uvicorn
-    # Run on 0.0.0.0:8000
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Run on 0.0.0.0:9000
+    uvicorn.run(app, host="0.0.0.0", port=9000)

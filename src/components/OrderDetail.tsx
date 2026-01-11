@@ -140,7 +140,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
     const fetchOrder = async () => {
       try {
         // Query dynamic order
-        const response = await fetch(`http://localhost:8000/api/order/${orderNo}`);
+        const response = await fetch(`http://localhost:9000/api/order/${orderNo}`);
         if (!response.ok) {
           throw new Error('Failed to fetch order');
         }
@@ -261,7 +261,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
         total_cost: (overrides && overrides.totalChoice !== undefined) ? (overrides.totalChoice ? parseFloat(overrides.totalChoice) : null) : (totalCostOverride ? parseFloat(totalCostOverride) : null)
       };
 
-      const response = await fetch(`http://localhost:8000/api/order/${order.orderNo}/cost`, {
+      const response = await fetch(`http://localhost:9000/api/order/${order.orderNo}/cost`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -288,7 +288,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
         purchase_cost: price
       }];
 
-      await fetch(`http://localhost:8000/api/order/${order.orderNo}/items/cost`, {
+      await fetch(`http://localhost:9000/api/order/${order.orderNo}/items/cost`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
