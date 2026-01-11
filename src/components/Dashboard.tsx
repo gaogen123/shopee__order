@@ -222,7 +222,32 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
             const ordersRes = await fetch(`http://localhost:9000/api/orders?${orderParams}`);
             if (ordersRes.ok) {
                 const ordersData = await ordersRes.json();
-                setRecentOrders(ordersData.orders || []);
+                const orders = ordersData.orders || [];
+
+                // Fetch exchange rates for currencies present in recent orders to convert to RMB when needed
+                const currencies = Array.from(new Set(orders.map((o: any) => o.currency || 'BRL')));
+                const rateMap: { [key: string]: number } = {};
+                await Promise.all(currencies.map(async (cur: string) => {
+                    try {
+                        // get rate of CNY per unit of currency (how many CNY equals 1 cur)
+                        const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${cur}`);
+                        if (!res.ok) return;
+                        const jd = await res.json();
+                        if (jd && jd.rates && jd.rates['CNY']) {
+                            rateMap[cur] = jd.rates['CNY'];
+                        }
+                    } catch (e) {
+                        // ignore rate fetch error
+                    }
+                }));
+
+                // Attach exchangeRate to each order (used when costs are RMB)
+                const ordersWithRate = orders.map((o: any) => ({
+                    ...o,
+                    exchangeRate: rateMap[o.currency || 'BRL'] || 1
+                }));
+
+                setRecentOrders(ordersWithRate);
                 setTotalOrders(ordersData.total || 0);
             }
         } catch (error) {
@@ -242,9 +267,10 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
     }, [currentPage, startDate, endDate, selectedStore, selectedSite, selectedStatus]);
 
 
-    // Format currency
+    // Format currency - 显示当地货币
     const formatCurrency = (val: number) => {
-        return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(val);
+        // 主要使用巴西雷亚尔显示，因为当前数据主要是巴西的
+        return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
     };
 
     const orderStats = [
@@ -585,8 +611,11 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                             <tr>
                                 <th className="px-4 py-3 rounded-l-lg">订单号</th>
                                 <th className="px-4 py-3">订单日期</th>
-                                <th className="px-4 py-3 text-right">销售额</th>
-                                <th className="px-4 py-3 text-right">成本</th>
+                                <th className="px-4 py-3 text-right">商品总额</th>
+                                <th className="px-4 py-3 text-right">预估运费</th>
+                                <th className="px-4 py-3 text-right">费用</th>
+                                <th className="px-4 py-3 text-right">预估收入</th>
+                                <th className="px-4 py-3 text-right">总成本</th>
                                 <th className="px-4 py-3 text-right">利润</th>
                                 <th className="px-4 py-3">状态</th>
                                 <th className="px-4 py-3 rounded-r-lg text-right">操作</th>
@@ -599,12 +628,12 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
 
                                     // 计算预估收入和利润
                                     const currency = order.currency || 'BRL';
-                                    const EXCHANGE_RATES: { [key: string]: number } = {
-                                        'BRL': 1.25, 'USD': 7.2, 'SGD': 5.3, 'MYR': 1.6,
-                                        'PHP': 0.13, 'IDR': 0.00046, 'THB': 0.2, 'VND': 0.00029, 'TWD': 0.23,
-                                        'CNY': 1.0
+                                    const CURRENCY_SYMBOLS: { [key: string]: string } = {
+                                        'BRL': 'R$', 'USD': '$', 'SGD': 'S$', 'MYR': 'RM',
+                                        'PHP': '₱', 'IDR': 'Rp', 'THB': '฿', 'VND': '₫', 'TWD': 'NT$',
+                                        'CNY': '¥'
                                     };
-                                    const rate = EXCHANGE_RATES[currency] || 1.0;
+                                    const currencySymbol = CURRENCY_SYMBOLS[currency] || currency;
 
                                     // 计算商品总额
                                     const itemList = order.item_list || [];
@@ -624,16 +653,43 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                                     // 总费用
                                     const totalFees = financials.total_fees || 0;
 
-                                    // 预估订单收入 - 优先使用后端返回的准确值
-                                    const estimatedRevenue = financials.order_income !== undefined
-                                        ? financials.order_income
-                                        : (itemTotal + estimatedShipping - totalFees);
+                                    // 预估订单收入 - 使用计算公式：商品总额 + 预估运费 - 总费用
+                                    const estimatedRevenue = itemTotal + estimatedShipping - totalFees;
 
-                                    // 转换为人民币
-                                    const salesCNY = order.total_amount * rate;
-                                    const revenueCNY = estimatedRevenue * rate;
-                                    const cost = order.total_cost || 0;
-                                    const profit = revenueCNY - cost;
+                                    // 使用本地货币
+                                    const salesLocal = order.total_amount;
+                                    const revenueLocal = estimatedRevenue;
+                                    // Determine total cost: prefer order.total_cost (user-entered, RMB),
+                                    // otherwise sum item-level user costs (purchase_cost + domestic_shipping_cost) and mark as RMB.
+                                    let cost = 0;
+                                    let costIsRMB = false;
+                                    const itemsForCost = order.item_list || [];
+                                    if (order.total_cost && order.total_cost > 0) {
+                                        cost = order.total_cost;
+                                        costIsRMB = true; // stored as RMB
+                                    } else if (itemsForCost.length > 0) {
+                                        const itemCostSum = itemsForCost.reduce((s: number, it: any) => {
+                                            const qty = it.model_quantity_purchased || it.quantity || 1;
+                                            return s + ((it.purchase_cost || 0) * qty);
+                                        }, 0);
+                                        const logisticsSum = itemsForCost.reduce((s: number, it: any) => s + ((it.domestic_shipping_cost || 0) * (it.model_quantity_purchased || it.quantity || 1)), 0);
+                                        if (itemCostSum > 0 || logisticsSum > 0) {
+                                            cost = itemCostSum + logisticsSum;
+                                            costIsRMB = true;
+                                        }
+                                    }
+
+                                    // Compute profit:
+                                    // - If cost is RMB (user-entered), convert estimated revenue to RMB using order.exchangeRate then subtract cost.
+                                    // - Otherwise compute in local currency: estimatedRevenue - cost.
+                                    let profit = 0;
+                                    if (costIsRMB) {
+                                        const exch = order.exchangeRate || 1;
+                                        const revenueRMB = (estimatedRevenue || 0) * exch;
+                                        profit = revenueRMB - cost;
+                                    } else {
+                                        profit = (estimatedRevenue || 0) - cost;
+                                    }
 
                                     return (
                                         <tr key={order.order_sn} className="hover:bg-gray-50 transition-colors">
@@ -646,14 +702,23 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                                                 </span>
                                             </td>
                                             <td className="px-4 py-4 text-right font-medium text-gray-900">
-                                                ¥{salesCNY.toFixed(2)}
+                                                {currencySymbol}{itemTotal.toFixed(2)}
+                                            </td>
+                                            <td className="px-4 py-4 text-right font-medium text-blue-600">
+                                                {currencySymbol}{estimatedShipping.toFixed(2)}
+                                            </td>
+                                            <td className="px-4 py-4 text-right font-medium text-red-600">
+                                                {currencySymbol}{totalFees.toFixed(2)}
+                                            </td>
+                                            <td className="px-4 py-4 text-right font-medium text-green-600">
+                                                {currencySymbol}{revenueLocal.toFixed(2)}
                                             </td>
                                             <td className="px-4 py-4 text-right font-medium text-orange-600">
-                                                ¥{cost.toFixed(2)}
+                                                {costIsRMB ? '¥' : currencySymbol}{cost.toFixed(2)}
                                             </td>
                                             <td className="px-4 py-4 text-right font-medium">
                                                 <span className={profit >= 0 ? 'text-green-600' : 'text-red-600'}>
-                                                    ¥{profit.toFixed(2)}
+                                                    {costIsRMB ? '¥' : currencySymbol}{profit.toFixed(2)}
                                                 </span>
                                             </td>
                                             <td className="px-4 py-4">
@@ -679,7 +744,7 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                                 })
                             ) : (
                                 <tr>
-                                    <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                                    <td colSpan={10} className="px-4 py-8 text-center text-gray-500">
                                         暂无订单数据
                                     </td>
                                 </tr>

@@ -649,19 +649,20 @@ def get_dashboard_financials(
     where_str = " AND ".join(where_clauses) if where_clauses else "1=1"
 
     # 计算财务统计
-    # 1. 总销售额 (total_amount)
+    # 1. 总销售额 (商品总额 = 所有商品的价格总和)
     c.execute(f"""
         SELECT
-            SUM(o.total_amount) as total_sales,
-            COUNT(*) as order_count,
-            AVG(o.total_amount) as avg_order_value
+            SUM(oi.model_discounted_price * oi.model_quantity_purchased) as total_sales,
+            COUNT(DISTINCT o.order_sn) as order_count,
+            AVG(oi.model_discounted_price * oi.model_quantity_purchased) as avg_item_value
         FROM orders o
+        JOIN order_items oi ON o.order_sn = oi.order_sn
         WHERE {where_str}
     """, params)
     sales_row = c.fetchone()
     total_sales = sales_row['total_sales'] or 0
     order_count = sales_row['order_count'] or 0
-    avg_order_value = sales_row['avg_order_value'] or 0
+    avg_order_value = sales_row['avg_item_value'] or 0
 
     # 2. 总成本 (从订单级别成本 + 商品级别成本计算)
     c.execute(f"""
