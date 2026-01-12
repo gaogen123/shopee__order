@@ -1149,14 +1149,19 @@ export default function App() {
     return Array.from(productMap.values());
   }, [orders]);
 
+  const handleTabChange = (tab: 'dashboard' | 'orders' | 'mappings') => {
+    setCurrentView(tab);
+    setSelectedOrderDetail(null);
+  };
+
   return (
     <div className="flex h-screen w-full bg-gray-50 overflow-hidden">
       <Toaster />
-// SyncOrderModal removed
 
-      <Sidebar activeTab={currentView} onTabChange={setCurrentView} />
 
-      <main className="flex-1 flex flex-col h-screen overflow-y-auto" style={{ marginLeft: '264px' }}>
+      <Sidebar activeTab={currentView} onTabChange={handleTabChange} />
+
+      <main className="flex-1 flex flex-col h-screen overflow-y-auto">
         <SyncProgress
           isVisible={isSyncing}
           taskId={currentSyncTaskId}
@@ -1171,7 +1176,10 @@ export default function App() {
               shopId={selectedOrderDetail.shopId}
               shopRegion={selectedOrderDetail.siteId}
               shopName={shopOptions.find(s => s.value === selectedOrderDetail.shopId)?.label}
-              onBack={() => setSelectedOrderDetail(null)}
+              onBack={() => {
+                setSelectedOrderDetail(null);
+                fetchOrders();
+              }}
             />
           </div>
         ) : currentView === 'orders' ? (

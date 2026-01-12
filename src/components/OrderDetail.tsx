@@ -24,6 +24,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
   const [showBuyerPaymentDetails, setShowBuyerPaymentDetails] = useState(false);
   const [showShippingDetails, setShowShippingDetails] = useState(false);
   const [itemCosts, setItemCosts] = useState<{ [key: number]: string }>({});
+  const [itemShippingCosts, setItemShippingCosts] = useState<{ [key: number]: string }>({});
   const [domesticLogisticsCost, setDomesticLogisticsCost] = useState<string>('');
   const [purchaseTotalOverride, setPurchaseTotalOverride] = useState<string | null>(null);
   const [totalCostOverride, setTotalCostOverride] = useState<string | null>(null);
@@ -42,6 +43,13 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
     if (value === '' || /^\d*\.?\d{0,2}$/.test(value)) {
       setItemCosts(prev => ({ ...prev, [itemId]: value }));
       setPurchaseTotalOverride(null); // 修改明细时清除总额覆盖
+      setTotalCostOverride(null); // 允许自动计算总成本
+    }
+  };
+
+  const handleItemShippingCostChange = (itemId: number, value: string) => {
+    if (value === '' || /^\d*\.?\d{0,2}$/.test(value)) {
+      setItemShippingCosts(prev => ({ ...prev, [itemId]: value }));
       setTotalCostOverride(null); // 允许自动计算总成本
     }
   };
@@ -70,6 +78,13 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
     }, 0);
   };
 
+  const calculateItemsShippingSum = () => {
+    return order.items.reduce((total, item) => {
+      const cost = parseFloat(itemShippingCosts[item.id] || '0');
+      return total + (cost * item.quantity);
+    }, 0);
+  };
+
   // 获取生效的采购总金额 (优先使用覆盖值)
   const getEffectivePurchaseTotal = () => {
     if (purchaseTotalOverride !== null) {
@@ -78,13 +93,23 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
     return calculateItemsPurchaseSum();
   };
 
-  // 计算总成本
   const calculateTotalCost = () => {
     if (totalCostOverride !== null) {
       return parseFloat(totalCostOverride);
     }
     const purchase = getEffectivePurchaseTotal();
-    const logistics = parseFloat(domesticLogisticsCost || '0');
+    // 优先使用 Item Level Domestic Shipping Sum
+    const itemShippingSum = calculateItemsShippingSum();
+    // 如果 itemShippingSum > 0，则使用它；否则回退到 order level (domesticLogisticsCost)
+    // 或者两者相加？通常是替代关系。为了兼容，我们两者取大或者相加。
+    // 这里假设用户如果在Item Level输入了，就以Item Level sum为准
+    // 但为了避免混乱，建议 Total Cost = Purchase + Domestic Shipping
+    // 其中 Domestic Shipping = Sum(Item Shipping)
+
+    // 如果没有任何Item Level Shipping，使用 Order Level
+    // 但用户想 "Order Item add Domestic Logistics Cost"，所以应该主要使用 Item Level。
+    const logistics = itemShippingSum > 0 ? itemShippingSum : parseFloat(domesticLogisticsCost || '0');
+
     return purchase + logistics;
   };
 
@@ -213,10 +238,15 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
 
         // Initialize Item Costs
         const costs: { [key: number]: string } = {};
+        const shippingCosts: { [key: number]: string } = {};
         (data.item_list || []).forEach((item: any) => {
-          if (item.sourcing_price > 0) costs[item.item_id] = String(item.sourcing_price);
+          if (item.purchase_cost > 0) costs[item.item_id] = String(item.purchase_cost);
+          else if (item.sourcing_price > 0) costs[item.item_id] = String(item.sourcing_price);
+
+          if (item.domestic_shipping_cost > 0) shippingCosts[item.item_id] = String(item.domestic_shipping_cost);
         });
         setItemCosts(costs);
+        setItemShippingCosts(shippingCosts);
 
         if (data.purchase_cost > 0) {
           setPurchaseTotalOverride(data.purchase_cost);
@@ -269,13 +299,15 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
     if (!order) return;
     const item = order.items.find((i: any) => i.id === itemId);
     const price = parseFloat(itemCosts[itemId] || '0');
+    const shipping = parseFloat(itemShippingCosts[itemId] || '0');
 
     try {
       const payload = [{
         item_id: itemId,
         model_id: item?.modelId || 0,
         sourcing_price: price,
-        purchase_cost: price
+        purchase_cost: price,
+        domestic_shipping_cost: shipping
       }];
 
       await fetch(`http://localhost:9000/api/order/${order.orderNo}/items/cost`, {
@@ -402,6 +434,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
               <div className="flex gap-4 pb-2 mb-2 border-b text-sm text-gray-500">
                 <div className="flex-1">商品</div>
                 <div className="text-center w-24">采购金额</div>
+                <div className="text-center w-24">国内运费</div>
                 <div className="text-center w-24">单价</div>
                 <div className="text-center w-16">数量</div>
                 <div className="text-right w-24">小计</div>
@@ -429,6 +462,20 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
                           value={itemCosts[item.id] || ''}
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => handleItemCostChange(item.id, e.target.value)}
+                          onBlur={() => handleSaveItemCost(item.id)}
+                          className="w-16 px-1 py-0.5 text-sm border border-gray-300 rounded text-center focus:outline-none focus:border-orange-500"
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+                    <div className="text-center w-24">
+                      <div className="flex items-center justify-center">
+                        <span className="text-gray-400 mr-1 text-xs">¥</span>
+                        <input
+                          type="text"
+                          value={itemShippingCosts[item.id] || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => handleItemShippingCostChange(item.id, e.target.value)}
                           onBlur={() => handleSaveItemCost(item.id)}
                           className="w-16 px-1 py-0.5 text-sm border border-gray-300 rounded text-center focus:outline-none focus:border-orange-500"
                           placeholder="0.00"

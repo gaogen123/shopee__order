@@ -8,7 +8,7 @@ interface SidebarProps {
 
 export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
     return (
-        <div className="fixed left-0 top-0 bg-white border-r border-gray-200 flex flex-col h-screen z-40" style={{ width: '264px' }}>
+        <div className="bg-white border-r border-gray-200 flex flex-col h-full z-40 shrink-0" style={{ width: '264px' }}>
             <div className="p-6 border-b border-gray-100">
                 <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
                     订单管理系统
