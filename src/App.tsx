@@ -622,10 +622,11 @@ export default function App() {
               }],
               shippingFee: netShipping,
               otherFees: financials.total_fees || 0,
-              estimatedRevenue: financials.order_income, // Use accurate revenue from backend
+              estimatedRevenue: apiOrder.estimated_revenue, // 直接使用后端返回的预估收入
+              estimatedProfit: apiOrder.estimated_profit,   // 直接使用后端返回的预估利润
               manualTotalCost: apiOrder.total_cost || undefined, // 采购总成本（订单级别）
               currency: currency,
-              exchangeRate: exchangeRate
+              exchangeRate: apiOrder.exchange_rate || exchangeRate // 优先使用后端返回的汇率
             };
           });
           setOrders(transformedOrders);
@@ -881,15 +882,22 @@ export default function App() {
               : item
           );
 
-          // Re-calculate total cost immediately so UI updates
+          // Re-calculate total cost and profit immediately so UI updates
           const newTotalCost = updatedItems.reduce((sum, item) =>
             sum + ((item.purchaseCost || 0) + (item.domesticShippingCost || 0)) * item.quantity, 0
           );
 
+          // Calculate new profit: (Revenue * ExchangeRate) - Cost
+          // Note: estimatedRevenue is already stored in order from backend
+          const revenue = order.estimatedRevenue || 0;
+          const exRate = order.exchangeRate || 1;
+          const newProfit = (revenue * exRate) - newTotalCost;
+
           return {
             ...order,
             items: updatedItems,
-            manualTotalCost: newTotalCost
+            manualTotalCost: newTotalCost,
+            estimatedProfit: newProfit
           };
         }
         return order;
@@ -917,11 +925,15 @@ export default function App() {
   const handleOrderTotalCostUpdate = (orderId: string, totalCost: number) => {
     // 更新前端状态
     setOrders(prevOrders =>
-      prevOrders.map(order =>
-        order.id === orderId
-          ? { ...order, manualTotalCost: totalCost }
-          : order
-      )
+      prevOrders.map(order => {
+        if (order.id === orderId) {
+          const revenue = order.estimatedRevenue || 0;
+          const exRate = order.exchangeRate || 1;
+          const newProfit = (revenue * exRate) - totalCost;
+          return { ...order, manualTotalCost: totalCost, estimatedProfit: newProfit };
+        }
+        return order;
+      })
     );
 
     // 保存到数据库

@@ -66,7 +66,7 @@ def get_order(order_sn: str, shop_id: int = Query(494829323, description="Shop I
     # 从数据库查询订单数据
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT raw_data, escrow_data, total_cost
+        SELECT raw_data, escrow_data, total_cost, estimated_revenue, exchange_rate, estimated_profit
         FROM orders
         WHERE order_sn = ?
     """, (order_sn,))
@@ -85,6 +85,11 @@ def get_order(order_sn: str, shop_id: int = Query(494829323, description="Shop I
 
         # 添加订单总成本信息到响应中
         result_data['total_cost'] = row['total_cost'] if row['total_cost'] is not None else 0
+        
+        # 添加预估收入、汇率和预估利润到响应中
+        result_data['estimated_revenue'] = row['estimated_revenue'] if row['estimated_revenue'] is not None else 0
+        result_data['exchange_rate'] = row['exchange_rate'] if row['exchange_rate'] is not None else 0
+        result_data['estimated_profit'] = row['estimated_profit'] if row['estimated_profit'] is not None else 0
     else:
         # 订单不存在，关闭连接并返回404错误
         conn.close()
@@ -188,7 +193,27 @@ def update_order_cost(order_sn: str, update: CostUpdate):
     # 注意：purchase_cost 和 domestic_shipping_cost 现在在商品级别，通过 update_item_costs 更新
     # 这里只更新订单级别的 total_cost
     if update.total_cost is not None:
-        c.execute("UPDATE orders SET total_cost = ? WHERE order_sn = ?", (update.total_cost, order_sn))
+        # 获取当前订单的预估收入和汇率
+        c.execute("SELECT estimated_revenue, exchange_rate FROM orders WHERE order_sn = ?", (order_sn,))
+        row = c.fetchone()
+        
+        if row:
+            estimated_revenue = row['estimated_revenue'] or 0
+            exchange_rate = row['exchange_rate'] or 1.0
+            
+            # 重新计算预估利润
+            revenue_in_rmb = estimated_revenue * exchange_rate
+            estimated_profit = revenue_in_rmb - update.total_cost
+            
+            # 更新 total_cost 和 estimated_profit
+            c.execute("""
+                UPDATE orders 
+                SET total_cost = ?, estimated_profit = ? 
+                WHERE order_sn = ?
+            """, (update.total_cost, estimated_profit, order_sn))
+        else:
+            # 如果订单不存在，只更新 total_cost
+            c.execute("UPDATE orders SET total_cost = ? WHERE order_sn = ?", (update.total_cost, order_sn))
 
     # 提交事务
     conn.commit()
@@ -232,11 +257,43 @@ def update_item_costs(order_sn: str, updates: list[ItemCostUpdate]):
                 updated_at=excluded.updated_at
         """, (order_sn, u.item_id, u.model_id, u.purchase_cost, u.domestic_shipping_cost, int(time.time())))
 
+    # 计算新的订单总成本
+    # 关联 order_items 表获取数量，关联 order_item_user_costs 表获取最新成本
+    c.execute("""
+        SELECT SUM((COALESCE(ouic.purchase_cost, 0) + COALESCE(ouic.domestic_shipping_cost, 0)) * oi.model_quantity_purchased)
+        FROM order_items oi
+        LEFT JOIN order_item_user_costs ouic ON oi.order_sn = ouic.order_sn 
+            AND oi.item_id = ouic.item_id 
+            AND oi.model_id = ouic.model_id
+        WHERE oi.order_sn = ?
+    """, (order_sn,))
+    
+    new_total_cost = c.fetchone()[0] or 0
+    
+    # 获取预估收入和汇率
+    c.execute("SELECT estimated_revenue, exchange_rate FROM orders WHERE order_sn = ?", (order_sn,))
+    order_row = c.fetchone()
+    
+    if order_row:
+        estimated_revenue = order_row['estimated_revenue'] or 0
+        exchange_rate = order_row['exchange_rate'] or 0
+        
+        # 计算预估利润
+        # 利润 = (预估收入 * 汇率) - 总成本
+        estimated_profit = (estimated_revenue * exchange_rate) - new_total_cost
+        
+        # 更新 orders 表中的 total_cost 和 estimated_profit
+        c.execute("""
+            UPDATE orders 
+            SET total_cost = ?, estimated_profit = ?
+            WHERE order_sn = ?
+        """, (new_total_cost, estimated_profit, order_sn))
+
     # 提交事务
     conn.commit()
     conn.close()
 
-    return {"status": "success"}
+    return {"status": "success", "new_total_cost": new_total_cost, "new_estimated_profit": estimated_profit if order_row else 0}
 
 @router.get("/api/orders")
 def get_orders(
@@ -310,10 +367,11 @@ def get_orders(
     c.execute(f"SELECT count(*) FROM orders WHERE {where_str}", params)
     total = c.fetchone()[0]
 
-    # 构建分页查询语句
+    # 构建分页查询语句 - 包含 estimated_revenue, exchange_rate, estimated_profit
     query = f"""
         SELECT raw_data, order_sn, order_status, total_amount, currency, create_time,
-               buyer_username, shop_id, estimated_shipping_fee, total_cost, escrow_data
+               buyer_username, shop_id, estimated_shipping_fee, total_cost, escrow_data,
+               estimated_revenue, exchange_rate, estimated_profit
         FROM orders
         WHERE {where_str}
         ORDER BY create_time DESC
@@ -349,6 +407,15 @@ def get_orders(
         order['estimated_shipping_fee'] = r['estimated_shipping_fee']
         order['create_time'] = r['create_time']
         order['total_cost'] = r['total_cost'] or 0  # 订单级别的采购总成本
+        
+        # 调试日志
+        if order['order_sn'] == '2601069NC34KCU':
+            print(f"DEBUG API: {order['order_sn']} - DB Revenue: {r['estimated_revenue']}, Profit: {r['estimated_profit']}")
+        
+        # 直接从数据库获取预估收入、汇率和预估利润（后端计算存储）
+        order['estimated_revenue'] = r['estimated_revenue'] if r['estimated_revenue'] is not None else 0
+        order['exchange_rate'] = r['exchange_rate'] if r['exchange_rate'] is not None else 0
+        order['estimated_profit'] = r['estimated_profit'] if r['estimated_profit'] is not None else 0
 
         # 从托管数据计算财务信息
         escrow_info = {}

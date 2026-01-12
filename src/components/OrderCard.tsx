@@ -35,6 +35,7 @@ export interface Order {
   shippingFee?: number; // 预估运费总额 (净额)
   otherFees?: number; // 其他费用
   estimatedRevenue?: number; // 预估订单收入 (实际收入, 原币种)
+  estimatedProfit?: number;  // 预估利润 (RMB)
   currency?: string; // 币种
   exchangeRate?: number; // 汇率
 }
@@ -66,16 +67,11 @@ export function OrderCard({ order, onViewDetails, onItemCostUpdate, onOrderTotal
   const displayTotalCost = order.manualTotalCost !== undefined ? order.manualTotalCost : orderTotalCost;
   const [manualTotalCost, setManualTotalCost] = useState(displayTotalCost.toString());
 
-  // Calculate estimated order revenue (预估订单收入) - 尽量使用准确值
-  const estimatedRevenue = order.estimatedRevenue !== undefined
-    ? order.estimatedRevenue
-    : (productTotalAmount + (order.shippingFee || 0) - (order.otherFees || 0));
+  // Calculate estimated order revenue (预估订单收入) - 直接使用后端值
+  const estimatedRevenue = order.estimatedRevenue || 0;
 
-  // Calculate Estimated Profit (预估利润)
-  // Formula: (Revenue * ExchangeRate) - Cost
-  // Cost is in RMB, Revenue is in local currency
-  const exchangeRate = order.exchangeRate || 1;
-  const estimatedProfit = (estimatedRevenue * exchangeRate) - displayTotalCost;
+  // Calculate Estimated Profit (预估利润) - 直接使用后端值
+  const estimatedProfit = order.estimatedProfit !== undefined ? order.estimatedProfit : 0;
 
   const statusColors = {
     pending: 'bg-orange-100 text-orange-700 border-orange-200',

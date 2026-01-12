@@ -161,7 +161,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
         setOrder({
           orderNo: data.order_sn,
           currency: currency,
-          exchangeRate: defaultRate,
+          exchangeRate: data.exchange_rate || defaultRate,
           status: getStatusLabel(data.order_status),
           statusColor: 'text-green-600 bg-green-50', // Simplified logic
           createTime: new Date(data.create_time * 1000).toLocaleString(),
@@ -196,7 +196,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
             commission: data.financials?.commission_fee || 0,
             serviceFee: data.financials?.service_fee || 0,
             transactionFee: data.financials?.seller_transaction_fee || 0,
-            estimatedRevenue: data.escrow_info?.order_income_amount !== undefined ? data.escrow_info.order_income_amount : ((calculatedItemTotal + ((data.financials?.estimated_shipping_fee || 0) - (data.escrow_info?.actual_shipping_fee || data.actual_shipping_fee || 0))) - (data.financials?.total_fees || 0)),
+            estimatedRevenue: data.estimated_revenue || 0,
           },
           buyerPayment: {
             itemTotal: calculatedItemTotal, // Use calculated item total
@@ -229,18 +229,8 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
           setTotalCostOverride(String(data.total_cost));
         }
 
-        // Fetch live exchange rate asynchronously
-        if (currency) {
-          fetch(`https://api.exchangerate-api.com/v4/latest/${currency}`)
-            .then(res => res.json())
-            .then(rateData => {
-              const liveRate = rateData.rates['CNY'];
-              if (liveRate) {
-                setOrder((prev: any) => ({ ...prev, exchangeRate: liveRate }));
-              }
-            })
-            .catch(e => console.error('Failed to fetch live exchange rate', e));
-        }
+        // Live exchange rate fetch removed to ensure consistency with backend
+
       } catch (err: any) {
         setError(err.message);
         // Fallback or keep loading false

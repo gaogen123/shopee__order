@@ -288,13 +288,59 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
     else:
          est_ship = order.get('estimated_shipping_fee', 0)
 
-    # Upsert with new column
+    # ====== 计算预估订单收入 (estimated_revenue) ======
+    # 汇率配置
+    EXCHANGE_RATES = {
+        'BRL': 1.24, 'USD': 7.2, 'SGD': 5.3, 'MYR': 1.6,
+        'PHP': 0.13, 'IDR': 0.00046, 'THB': 0.2, 'VND': 0.00029, 'TWD': 0.23,
+        'CNY': 1.0
+    }
+    currency = order.get('currency', 'BRL')
+    exchange_rate = EXCHANGE_RATES.get(currency, 1.0)
+    
+    # 计算商品总额
+    item_total = sum(
+        float(item.get('model_discounted_price', 0)) * float(item.get('model_quantity_purchased', 0))
+        for item in order.get('item_list', [])
+    )
+    
+    # 计算预估收入
+    estimated_revenue = 0
+    if escrow_data:
+        # 优先使用 escrow 中的 order_income_amount
+        order_income_amount = escrow_data.get('order_income_amount')
+        if order_income_amount is not None:
+            estimated_revenue = float(order_income_amount)
+        else:
+            # 备用计算公式: (商品总额 + 预估运费净额) - 总费用
+            actual_shipping = float(escrow_data.get('actual_shipping_fee', 0))
+            estimated_shipping = float(escrow_data.get('estimated_shipping_fee', 0))
+            commission = float(escrow_data.get('commission_fee', 0))
+            service = float(escrow_data.get('service_fee', 0))
+            transaction = float(escrow_data.get('seller_transaction_fee', 0))
+            total_fees = commission + service + transaction
+            
+            # 预估运费净额 = 预估运费 - 实际运费
+            shipping_net = estimated_shipping - actual_shipping
+            estimated_revenue = (item_total + shipping_net) - total_fees
+    
+    # 获取现有成本来计算利润（如果存在）
+    c.execute("SELECT total_cost FROM orders WHERE order_sn = ?", (order.get('order_sn'),))
+    existing = c.fetchone()
+    total_cost = existing['total_cost'] if existing and existing['total_cost'] else 0
+    
+    # 计算预估利润 = 预估收入(原币种) * 汇率 - 总成本(人民币)
+    revenue_in_rmb = estimated_revenue * exchange_rate
+    estimated_profit = revenue_in_rmb - total_cost
+
+    # Upsert with estimated_revenue, exchange_rate, estimated_profit columns
     c.execute('''
         INSERT INTO orders (
             order_sn, shop_id, order_status, total_amount, estimated_shipping_fee, currency,
             create_time, pay_time, shipping_carrier, payment_method,
-            buyer_username, recipient_address, raw_data, escrow_data, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            buyer_username, recipient_address, raw_data, escrow_data, updated_at,
+            estimated_revenue, exchange_rate, estimated_profit
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(order_sn) DO UPDATE SET
             order_status=excluded.order_status,
             total_amount=excluded.total_amount,
@@ -303,7 +349,10 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
             pay_time=excluded.pay_time,
             raw_data=excluded.raw_data,
             escrow_data=COALESCE(excluded.escrow_data, orders.escrow_data),
-            updated_at=excluded.updated_at
+            updated_at=excluded.updated_at,
+            estimated_revenue=excluded.estimated_revenue,
+            exchange_rate=excluded.exchange_rate,
+            estimated_profit=excluded.estimated_profit
     ''', (
         order.get('order_sn'),
         shop_id,
@@ -319,7 +368,10 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
         json.dumps(order.get('recipient_address', {})),
         json.dumps(order),
         escrow_json,
-        int(time.time())
+        int(time.time()),
+        estimated_revenue,
+        exchange_rate,
+        estimated_profit
     ))
 
     # Save Items - 删除并重新插入订单项（不再包含成本字段）
