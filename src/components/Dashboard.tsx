@@ -18,6 +18,8 @@ interface DashboardStats {
     };
     financials: {
         sales: number;
+        revenue?: number;
+        revenue_rmb?: number;
         cost: number;
         profit: number;
         margin: number;
@@ -154,6 +156,8 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                     },
                     financials: {
                         sales: financialsData?.financials?.sales || 0,
+                        revenue: financialsData?.financials?.revenue || 0,
+                        revenue_rmb: financialsData?.financials?.revenue_rmb || 0,
                         cost: financialsData?.financials?.cost || 0,
                         profit: financialsData?.financials?.profit || 0,
                         margin: financialsData?.financials?.margin || 0
@@ -334,6 +338,12 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
             color: 'green'
         },
         {
+            title: '总收入',
+            value: formatCurrency(stats?.financials?.revenue || 0),
+            icon: DollarSign,
+            color: 'green'
+        },
+        {
             title: '总成本',
             // 总成本显示为人民币（用户录入成本以人民币计）
             value: `¥${(stats?.financials?.cost || 0).toFixed(2)}`,
@@ -342,7 +352,7 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
         },
         {
             title: '总利润',
-            value: formatCurrency(stats?.financials?.profit || 0),
+            value: `¥${(stats?.financials?.profit || 0).toFixed(2)}`,
             icon: TrendingUp,
             color: 'blue'
         },
@@ -506,7 +516,7 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
             {/* 成本利润卡片 */}
             <div>
                 <h2 className="text-base font-semibold text-gray-900 mb-4">成本与利润</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                     {financialStats.map((stat, index) => {
                         const Icon = stat.icon;
                         return (

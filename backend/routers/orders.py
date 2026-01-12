@@ -731,41 +731,27 @@ def get_dashboard_financials(
     order_count = sales_row['order_count'] or 0
     avg_order_value = sales_row['avg_item_value'] or 0
 
-    # 2. 总成本 (从订单级别成本 + 商品级别成本计算)
+    # 2. 总成本、总利润、总收入
+    # 用户要求：总收入显示为当地币 (SUM estimated_revenue)
+    # 利润率=总利润(RMB) / 总收入(RMB)
     c.execute(f"""
         SELECT
-            SUM(COALESCE(o.total_cost, 0)) as order_level_cost,
-            SUM(COALESCE(ouc.purchase_cost * ouc.quantity, 0)) as item_purchase_cost,
-            SUM(COALESCE(ouc.domestic_shipping_cost * ouc.quantity, 0)) as item_shipping_cost
+            SUM(COALESCE(o.total_cost, 0)) as total_cost,
+            SUM(COALESCE(o.estimated_profit, 0)) as total_profit,
+            SUM(COALESCE(o.estimated_revenue, 0)) as total_revenue_local,
+            SUM(COALESCE(o.estimated_revenue * COALESCE(o.exchange_rate, 1), 0)) as total_revenue_rmb
         FROM orders o
-        LEFT JOIN (
-            SELECT
-                ouic.order_sn,
-                ouic.item_id,
-                ouic.model_id,
-                ouic.purchase_cost,
-                ouic.domestic_shipping_cost,
-                oi.model_quantity_purchased as quantity
-            FROM order_item_user_costs ouic
-            JOIN order_items oi ON ouic.order_sn = oi.order_sn
-                AND ouic.item_id = oi.item_id
-                AND ouic.model_id = oi.model_id
-        ) ouc ON o.order_sn = ouc.order_sn
         WHERE {where_str}
-        GROUP BY o.order_sn
     """, params)
+    
+    financial_row = c.fetchone()
+    total_cost = financial_row['total_cost'] or 0
+    total_profit = financial_row['total_profit'] or 0
+    total_revenue_local = financial_row['total_revenue_local'] or 0
+    total_revenue_rmb = financial_row['total_revenue_rmb'] or 0
 
-    # 由于上面的查询返回多行，我们需要聚合
-    total_cost = 0
-    cost_rows = c.fetchall()
-    for row in cost_rows:
-        order_cost = row['order_level_cost'] or 0
-        item_cost = (row['item_purchase_cost'] or 0) + (row['item_shipping_cost'] or 0)
-        total_cost += order_cost + item_cost
-
-    # 3. 计算利润 (销售额 - 成本)
-    total_profit = total_sales - total_cost
-    profit_margin = (total_profit / total_sales * 100) if total_sales > 0 else 0
+    # 3. 计算利润率 (Profit/Revenue(RMB))
+    profit_margin = (total_profit / total_revenue_rmb * 100) if total_revenue_rmb > 0 else 0
 
     # 4. 成本录入统计
     c.execute(f"""
@@ -788,35 +774,62 @@ def get_dashboard_financials(
     total_items = cost_stats['total_items'] or 0
 
     # 5. 历史趋势数据 (按日期分组)
+    # 为避免 Join 导致的 Cost/Profit 重复计算，我们将查询分为两步：
+    
+    # 5.1 获取每日成本、利润和订单数 (Order Level)
     c.execute(f"""
         SELECT
             DATE(o.create_time, 'unixepoch', 'localtime') as date,
             COUNT(*) as order_count,
-            SUM(o.total_amount) as daily_sales,
-            SUM(COALESCE(o.total_cost, 0) +
-                COALESCE(ouc.purchase_cost * oi.model_quantity_purchased, 0) +
-                COALESCE(ouc.domestic_shipping_cost * oi.model_quantity_purchased, 0)) as daily_cost
+            SUM(COALESCE(o.total_cost, 0)) as daily_cost,
+            SUM(COALESCE(o.estimated_profit, 0)) as daily_profit
         FROM orders o
-        LEFT JOIN order_items oi ON o.order_sn = oi.order_sn
-        LEFT JOIN order_item_user_costs ouc ON o.order_sn = ouc.order_sn
-            AND oi.item_id = ouc.item_id
-            AND oi.model_id = ouc.model_id
         WHERE {where_str}
         GROUP BY DATE(o.create_time, 'unixepoch', 'localtime')
-        ORDER BY date DESC
-        LIMIT 30
     """, params)
-
-    history_data = []
+    
+    financial_map = {}
     for row in c.fetchall():
-        daily_sales = row['daily_sales'] or 0
-        daily_cost = row['daily_cost'] or 0
-        daily_profit = daily_sales - daily_cost
+        financial_map[row['date']] = {
+            'order_count': row['order_count'],
+            'daily_cost': row['daily_cost'],
+            'daily_profit': row['daily_profit']
+        }
+
+    # 5.2 获取每日销售额 (Item Level - 商品总额)
+    c.execute(f"""
+        SELECT
+            DATE(o.create_time, 'unixepoch', 'localtime') as date,
+            SUM(oi.model_discounted_price * oi.model_quantity_purchased) as daily_sales
+        FROM orders o
+        JOIN order_items oi ON o.order_sn = oi.order_sn
+        WHERE {where_str}
+        GROUP BY DATE(o.create_time, 'unixepoch', 'localtime')
+    """, params)
+    
+    sales_map = {}
+    for row in c.fetchall():
+        sales_map[row['date']] = row['daily_sales']
+
+    # 5.3 合并数据
+    all_dates = set(financial_map.keys()) | set(sales_map.keys())
+    history_data = []
+    
+    for date in sorted(list(all_dates), reverse=True)[:30]:
+        fin = financial_map.get(date, {})
+        sale = sales_map.get(date, 0)
+        
+        daily_cost = fin.get('daily_cost', 0)
+        daily_profit = fin.get('daily_profit', 0)
+        
+        # 注意：这里我们直接展示数据库算出的 daily_profit，而不是由 daily_sales - daily_cost 计算
+        # 因为 daily_sales 是原币种，daily_cost 是人民币，直接相减没有意义
+        
         history_data.append({
-            'date': row['date'],
-            'sales': daily_sales,
-            'cost': daily_cost,
-            'profit': daily_profit
+            'date': date,
+            'sales': sale or 0,
+            'cost': daily_cost or 0,
+            'profit': daily_profit or 0
         })
 
     # 关闭数据库连接
@@ -826,6 +839,8 @@ def get_dashboard_financials(
     return {
         "financials": {
             "sales": total_sales,
+            "revenue": total_revenue_local,
+            "revenue_rmb": total_revenue_rmb,
             "cost": total_cost,
             "profit": total_profit,
             "margin": profit_margin
