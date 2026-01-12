@@ -513,6 +513,7 @@ export default function App() {
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [costStatus, setCostStatus] = useState<CostStatus>('all');
   const [selectedOrderDetail, setSelectedOrderDetail] = useState<Order | null>(null);
+  const [dashboardKey, setDashboardKey] = useState(0); // Used to force refresh Dashboard
   const [costMappings, setCostMappings] = useState<ProductCostMapping[]>([]);
   const [showMappingManager, setShowMappingManager] = useState(false);
 
@@ -1178,13 +1179,14 @@ export default function App() {
               shopName={shopOptions.find(s => s.value === selectedOrderDetail.shopId)?.label}
               onBack={() => {
                 setSelectedOrderDetail(null);
-                fetchOrders();
+                fetchOrders(); // Refresh orders list
+                setDashboardKey(prev => prev + 1); // Refresh Dashboard
               }}
             />
           </div>
         ) : currentView === 'orders' ? (
           <div className="flex-1 p-4 sm:p-6 lg:p-8">
-            <div className="max-w-6xl mx-auto space-y-6">
+            <div className="w-full space-y-6">
               {/* Header */}
               <div className="flex items-center justify-between">
                 <div>
@@ -1348,7 +1350,7 @@ export default function App() {
         ) : currentView === 'dashboard' ? (
           /* Dashboard View */
           <div className="flex-1 overflow-y-auto">
-            <Dashboard onViewOrder={handleDashboardViewOrder} />
+            <Dashboard key={dashboardKey} onViewOrder={handleDashboardViewOrder} />
           </div>
         ) : (
           /* Mappings View */

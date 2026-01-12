@@ -328,7 +328,7 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
   const shopeeOrderUrl = getShopeeOrderDetailUrl(order.orderNo, shopId);
 
   return (
-    <div className="max-w-7xl mx-auto p-6">
+    <div className="w-full h-full p-6">
       {/* Header */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-4">
         <div className="flex items-center justify-between mb-4">

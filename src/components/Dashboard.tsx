@@ -222,29 +222,13 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
             const ordersRes = await fetch(`http://localhost:9000/api/orders?${orderParams}`);
             if (ordersRes.ok) {
                 const ordersData = await ordersRes.json();
+
                 const orders = ordersData.orders || [];
 
-                // Fetch exchange rates for currencies present in recent orders to convert to RMB when needed
-                const currencies = Array.from(new Set(orders.map((o: any) => o.currency || 'BRL')));
-                const rateMap: { [key: string]: number } = {};
-                await Promise.all(currencies.map(async (cur: string) => {
-                    try {
-                        // get rate of CNY per unit of currency (how many CNY equals 1 cur)
-                        const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${cur}`);
-                        if (!res.ok) return;
-                        const jd = await res.json();
-                        if (jd && jd.rates && jd.rates['CNY']) {
-                            rateMap[cur] = jd.rates['CNY'];
-                        }
-                    } catch (e) {
-                        // ignore rate fetch error
-                    }
-                }));
-
-                // Attach exchangeRate to each order (used when costs are RMB)
+                // Use exchange rate from backend directly
                 const ordersWithRate = orders.map((o: any) => ({
                     ...o,
-                    exchangeRate: rateMap[o.currency || 'BRL'] || 1
+                    exchangeRate: o.exchange_rate || 1
                 }));
 
                 setRecentOrders(ordersWithRate);
@@ -401,6 +385,7 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
             'UNPAID': { label: '待付款', bg: 'bg-orange-100', text: 'text-orange-600' },
             'READY_TO_SHIP': { label: '待出货', bg: 'bg-blue-100', text: 'text-blue-600' },
             'SHIPPED': { label: '运送中', bg: 'bg-purple-100', text: 'text-purple-600' },
+            'TO_CONFIRM_RECEIVE': { label: '待确认收货', bg: 'bg-orange-100', text: 'text-orange-600' },
             'COMPLETED': { label: '已完成', bg: 'bg-green-100', text: 'text-green-600' },
             'CANCELLED': { label: '已取消', bg: 'bg-red-100', text: 'text-red-600' },
             'TO_RETURN': { label: '退货/退款', bg: 'bg-red-50', text: 'text-red-500' }
@@ -627,7 +612,6 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                                 recentOrders.map(order => {
                                     const status = getStatusInfo(order.order_status);
 
-                                    // 计算预估收入和利润
                                     const currency = order.currency || 'BRL';
                                     const CURRENCY_SYMBOLS: { [key: string]: string } = {
                                         'BRL': 'R$', 'USD': '$', 'SGD': 'S$', 'MYR': 'RM',
@@ -636,61 +620,40 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                                     };
                                     const currencySymbol = CURRENCY_SYMBOLS[currency] || currency;
 
-                                    // 计算商品总额
+                                    // 计算商品总额 (用于显示)
                                     const itemList = order.item_list || [];
                                     const itemTotal = itemList.reduce((sum: number, item: any) =>
                                         sum + (item.model_discounted_price || 0) * (item.model_quantity_purchased || 0), 0
                                     );
 
-                                    // 从financials获取费用和运费信息
+                                    // 预估运费与费用 (用于显示)
+                                    // 从 backend estimated_shipping_fee 取值 (它是净运费吗? 以前逻辑是 buyer_paid - actual + rebate)
+                                    // 为保持一致性，如果 backend 有 estimated_shipping_fee，直接用?
+                                    // 但 Dashboard 只有 order 对象。
+                                    // 使用简单逻辑用于 Dashboard 展示，或者复用之前逻辑但不参与 Profit 计算
+
                                     const financials = order.financials || {};
+                                    // 之前的逻辑: estimatedShipping = buyerPaid - actual + rebate
                                     const estimatedShippingFee = financials.actual_shipping_fee || 0;
                                     const buyerPaidShipping = financials.buyer_paid_shipping || 0;
                                     const shopeeShippingRebate = financials.shopee_shipping_rebate || 0;
-
-                                    // 预估运费 = 买家支付运费 - 物流费 + Shopee运费回扣
                                     const estimatedShipping = buyerPaidShipping - estimatedShippingFee + shopeeShippingRebate;
 
-                                    // 总费用
                                     const totalFees = financials.total_fees || 0;
 
-                                    // 预估订单收入 - 使用计算公式：商品总额 + 预估运费 - 总费用
-                                    const estimatedRevenue = itemTotal + estimatedShipping - totalFees;
+                                    // 直接使用后端返回的预估收入、总成本和利润
+                                    // 确保字段存在，如果数据库未更新这些字段（旧数据），可能为 null 或 0
+                                    // 但根据 user request，我们直接取用
 
-                                    // 使用本地货币
-                                    const salesLocal = order.total_amount;
+                                    const estimatedRevenue = order.estimated_revenue || 0;
+                                    const cost = order.total_cost || 0;
+                                    // total_cost 在数据库中存储的是 RMB
+                                    const costIsRMB = true;
+                                    const profit = order.estimated_profit || 0;
+
+                                    // 本地显示货币 (用于收入列)
+                                    // 注意：estimated_revenue 是原币种
                                     const revenueLocal = estimatedRevenue;
-                                    // Determine total cost: prefer order.total_cost (user-entered, RMB),
-                                    // otherwise sum item-level user costs (purchase_cost + domestic_shipping_cost) and mark as RMB.
-                                    let cost = 0;
-                                    let costIsRMB = false;
-                                    const itemsForCost = order.item_list || [];
-                                    if (order.total_cost && order.total_cost > 0) {
-                                        cost = order.total_cost;
-                                        costIsRMB = true; // stored as RMB
-                                    } else if (itemsForCost.length > 0) {
-                                        const itemCostSum = itemsForCost.reduce((s: number, it: any) => {
-                                            const qty = it.model_quantity_purchased || it.quantity || 1;
-                                            return s + ((it.purchase_cost || 0) * qty);
-                                        }, 0);
-                                        const logisticsSum = itemsForCost.reduce((s: number, it: any) => s + ((it.domestic_shipping_cost || 0) * (it.model_quantity_purchased || it.quantity || 1)), 0);
-                                        if (itemCostSum > 0 || logisticsSum > 0) {
-                                            cost = itemCostSum + logisticsSum;
-                                            costIsRMB = true;
-                                        }
-                                    }
-
-                                    // Compute profit:
-                                    // - If cost is RMB (user-entered), convert estimated revenue to RMB using order.exchangeRate then subtract cost.
-                                    // - Otherwise compute in local currency: estimatedRevenue - cost.
-                                    let profit = 0;
-                                    if (costIsRMB) {
-                                        const exch = order.exchangeRate || 1;
-                                        const revenueRMB = (estimatedRevenue || 0) * exch;
-                                        profit = revenueRMB - cost;
-                                    } else {
-                                        profit = (estimatedRevenue || 0) - cost;
-                                    }
 
                                     return (
                                         <tr key={order.order_sn} className="hover:bg-gray-50 transition-colors">
