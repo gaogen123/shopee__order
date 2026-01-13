@@ -27,6 +27,7 @@ interface DashboardStats {
     history: {
         date: string;
         sales: number;
+        revenue: number;
         cost: number;
         profit: number;
     }[];
@@ -60,6 +61,13 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
 
     const [stats, setStats] = useState<DashboardStats | null>(null);
     const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
+
+    const [visibleSeries, setVisibleSeries] = useState<{ [key: string]: boolean }>({
+        "销售额": true,
+        "收入": true,
+        "成本": true,
+        "利润": true
+    });
 
     const [loading, setLoading] = useState(false);
 
@@ -122,14 +130,14 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
             }
 
             // 获取订单统计
-            const statsRes = await fetch(`http://localhost:9000/api/orders/stats?${statsParams.toString()}`);
+            const statsRes = await fetch(`http://localhost:9000/api/orders/stats?${statsParams.toString()}&_t=${new Date().getTime()}`);
             let statsData = null;
             if (statsRes.ok) {
                 statsData = await statsRes.json();
             }
 
             // 获取财务统计
-            const financialsRes = await fetch(`http://localhost:9000/api/dashboard/financials?${statsParams.toString()}`);
+            const financialsRes = await fetch(`http://localhost:9000/api/dashboard/financials?${statsParams.toString()}&_t=${new Date().getTime()}`);
             let financialsData = null;
             if (financialsRes.ok) {
                 financialsData = await financialsRes.json();
@@ -365,12 +373,22 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
     ];
 
     // Real Chart Data from Backend History
+    // Real Chart Data from Backend History
     const chartData = (stats?.history || []).map(item => ({
         date: item.date.substring(5), // MM-DD
         "销售额": item.sales,
+        "收入": item.revenue || 0,
         "成本": item.cost,
         "利润": item.profit
     }));
+
+    const handleLegendClick = (e: any) => {
+        const { dataKey } = e;
+        setVisibleSeries(prev => ({
+            ...prev,
+            [dataKey]: !prev[dataKey]
+        }));
+    };
 
     // Derived from cancelled vs total (Mock specific status breakdown)
     // Real Status Breakdown
@@ -545,16 +563,49 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                         <h3 className="text-base font-semibold text-gray-900">销售与利润趋势</h3>
                     </div>
                     <ResponsiveContainer width="100%" height={300}>
-                        <BarChart data={chartData}>
+                        <LineChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                             <XAxis dataKey="date" tick={{ fontSize: 12 }} />
                             <YAxis tick={{ fontSize: 12 }} />
                             <Tooltip />
-                            <Legend />
-                            <Bar dataKey="销售额" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                            <Bar dataKey="成本" fill="#ef4444" radius={[4, 4, 0, 0]} />
-                            <Bar dataKey="利润" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                        </BarChart>
+                            <Legend onClick={handleLegendClick} cursor="pointer" />
+                            <Line
+                                type="monotone"
+                                dataKey="销售额"
+                                stroke="#3b82f6"
+                                strokeWidth={2}
+                                hide={!visibleSeries["销售额"]}
+                                dot={{ r: 4 }}
+                                activeDot={{ r: 6 }}
+                            />
+                            <Line
+                                type="monotone"
+                                dataKey="收入"
+                                stroke="#10b981"
+                                strokeWidth={2}
+                                hide={!visibleSeries["收入"]}
+                                dot={{ r: 4 }}
+                                activeDot={{ r: 6 }}
+                            />
+                            <Line
+                                type="monotone"
+                                dataKey="成本"
+                                stroke="#ef4444"
+                                strokeWidth={2}
+                                hide={!visibleSeries["成本"]}
+                                dot={{ r: 4 }}
+                                activeDot={{ r: 6 }}
+                            />
+                            <Line
+                                type="monotone"
+                                dataKey="利润"
+                                stroke="#8b5cf6"
+                                strokeWidth={2}
+                                hide={!visibleSeries["利润"]}
+                                dot={{ r: 4 }}
+                                activeDot={{ r: 6 }}
+                            />
+                        </LineChart>
                     </ResponsiveContainer>
                 </div>
 

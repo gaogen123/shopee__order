@@ -498,6 +498,9 @@ export default function App() {
         if (data.shops) setShopOptions(data.shops);
       })
       .catch(err => console.error("Failed to fetch shops:", err));
+
+    // Initial fetch of mappings
+    fetchMappings();
   }, []);
 
   const [orders, setOrders] = useState<Order[]>([]);
@@ -1097,38 +1100,81 @@ export default function App() {
   const allSelected = paginatedOrders.length > 0 && paginatedOrders.every(order => selectedOrders.has(order.id));
   const someSelected = paginatedOrders.some(order => selectedOrders.has(order.id)) && !allSelected;
 
+  // 从后端获取成本映射列表
+  const fetchMappings = () => {
+    fetch('http://localhost:9000/api/mappings')
+      .then(res => res.json())
+      .then(data => {
+        setCostMappings(data);
+      })
+      .catch(err => console.error("获取成本映射失败", err));
+  };
+
+  // 添加新的成本映射
   const handleAddMapping = (mapping: Omit<ProductCostMapping, "id" | "createdAt">) => {
-    const newMapping: ProductCostMapping = {
-      ...mapping,
-      id: `mapping-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-    };
-    setCostMappings(prev => [...prev, newMapping]);
-    toast.success(`已添加商品成本映射: ${mapping.productName}`);
-  };
-
-  const handleDeleteMapping = (id: string) => {
-    setCostMappings(prev => prev.filter(m => m.id !== id));
-    toast.success("已删除成本映射");
-  };
-
-  const handleSaveMapping = (productId: string, productName: string, sku: string | undefined, siteId: string, shopId: string, purchaseCost: number, domesticShippingCost: number) => {
-    const existingMapping = costMappings.find(
-      m => m.productId === productId && m.siteId === siteId && m.shopId === shopId
-    );
-
-    if (existingMapping) {
-      setCostMappings(prev =>
-        prev.map(m =>
-          m.id === existingMapping.id
-            ? { ...m, purchaseCost, domesticShippingCost, sku }
-            : m
-        )
-      );
-      toast.success("已更新成本映射");
-    } else {
-      handleAddMapping({ productId, productName, sku, siteId, shopId, purchaseCost, domesticShippingCost });
+    // 验证 item_id 是否有效
+    const itemId = parseInt(mapping.productId);
+    if (isNaN(itemId)) {
+      toast.error("无效的商品ID，无法保存映射");
+      console.error("Invalid product ID:", mapping.productId);
+      return;
     }
+
+    // 构建请求载荷
+    const payload = {
+      site_id: mapping.siteId,
+      shop_id: mapping.shopId,
+      item_id: itemId,
+      sku_id: mapping.sku,
+      product_name: mapping.productName,
+      purchase_cost: mapping.purchaseCost,
+      domestic_shipping_cost: mapping.domesticShippingCost
+    };
+
+    // 调用保存接口
+    fetch('http://localhost:9000/api/mappings/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success') {
+          // 刷新映射列表以获取最新的ID和时间戳
+          fetchMappings();
+          toast.success(`已保存商品成本映射: ${mapping.productName}`);
+        } else {
+          toast.error("保存失败");
+        }
+      })
+      .catch(err => {
+        console.error("保存映射错误:", err);
+        toast.error("保存请求失败");
+      });
+  };
+
+  // 删除指定的成本映射
+  const handleDeleteMapping = (id: string) => {
+    fetch(`http://localhost:9000/api/mappings/${id}`, {
+      method: 'DELETE'
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success') {
+          // 更新本地状态
+          setCostMappings(prev => prev.filter(m => m.id !== id));
+          toast.success("已删除成本映射");
+        } else {
+          toast.error("删除失败");
+        }
+      })
+      .catch(err => toast.error("删除请求失败"));
+  };
+
+  // 保存成本映射（复用添加逻辑，后端通过唯一键处理更新）
+  const handleSaveMapping = (productId: string, productName: string, sku: string | undefined, siteId: string, shopId: string, purchaseCost: number, domesticShippingCost: number) => {
+    // 复用 handleAddMapping，后端会自动处理插入或更新
+    handleAddMapping({ productId, productName, sku, siteId, shopId, purchaseCost, domesticShippingCost });
   };
 
   // Extract unique products from all orders

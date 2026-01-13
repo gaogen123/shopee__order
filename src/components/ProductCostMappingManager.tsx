@@ -55,6 +55,7 @@ interface OrderItem {
   id: string;
   productName: string;
   sku?: string;
+  originalItemId?: number;
 }
 
 export function ProductCostMappingManager({
@@ -114,11 +115,16 @@ export function ProductCostMappingManager({
 
   // Check which items already have mappings
   const itemMappingStatus = searchResults.map(result => {
-    const existingMapping = result.item.sku
-      ? mappings.find(
-        m => m.sku === result.item.sku && m.siteId === result.order.siteId && m.shopId === result.order.shopId
-      )
-      : null;
+    // Map using originalItemId if available (for robust cross-order mapping), else fallback to id
+    const lookupId = result.item.originalItemId ? String(result.item.originalItemId) : result.item.id;
+
+    const existingMapping = mappings.find(
+      m => m.productId === lookupId && m.siteId === result.order.siteId && m.shopId === result.order.shopId && m.sku === (result.item.sku || "")
+    );
+
+    // Fallback: try matching by SKU if ID match failed (optional, but good for user exp)
+    // For now we stick to strict ID match as per previous logic, but now using raw ID.
+
     return {
       order: result.order,
       item: result.item,
@@ -143,17 +149,22 @@ export function ProductCostMappingManager({
 
   // Build product options from orders with order number, date and SKU
   const productOptions = orders.flatMap(order =>
-    order.items.map(item => ({
-      id: item.id,
-      name: item.productName,
-      sku: item.sku,
-      orderNumber: order.orderNumber,
-      orderDate: order.orderDate,
-      siteId: order.siteId,
-      shopId: order.shopId,
-      displayText: `${item.productName}${item.sku ? ` (SKU: ${item.sku})` : ''}`,
-      searchText: `${order.orderNumber} ${order.orderDate} ${item.id} ${item.productName} ${item.sku || ''}`.toLowerCase(),
-    }))
+    order.items.map(item => {
+      // Use originalItemId as the value for the mapping ID if available
+      const mappingId = item.originalItemId ? String(item.originalItemId) : item.id;
+      return {
+        id: mappingId, // This sets the value used in handleProductSelect
+        displayId: item.id, // Keep display ID as the one user sees (compound) or raw? Let's use raw for clarity in list if possible
+        name: item.productName,
+        sku: item.sku,
+        orderNumber: order.orderNumber,
+        orderDate: order.orderDate,
+        siteId: order.siteId,
+        shopId: order.shopId,
+        displayText: `${item.productName}${item.sku ? ` (SKU: ${item.sku})` : ''}`,
+        searchText: `${order.orderNumber} ${order.orderDate} ${item.id} ${item.productName} ${item.sku || ''}`.toLowerCase(),
+      };
+    })
   );
 
   // Filter products based on search query and date query
@@ -197,11 +208,16 @@ export function ProductCostMappingManager({
     }
   };
 
+  // 处理添加映射的逻辑
   const handleAddMapping = () => {
+    // 验证必填字段：产品名称、站点和店铺
     if (!newMapping.productName.trim() || !newMapping.siteId || !newMapping.shopId) {
       return;
     }
+
+    // 执行添加映射的回调
     onAddMapping({
+      // 如果是手动输入的，则生成一个带时间戳的临时 ID
       productId: newMapping.productId || `manual-${Date.now()}`,
       productName: newMapping.productName,
       sku: newMapping.sku || undefined,
@@ -210,6 +226,8 @@ export function ProductCostMappingManager({
       purchaseCost: newMapping.purchaseCost,
       domesticShippingCost: newMapping.domesticShippingCost,
     });
+
+    // 重置表单状态
     setNewMapping({
       productId: "",
       productName: "",
@@ -219,6 +237,8 @@ export function ProductCostMappingManager({
       purchaseCost: 0,
       domesticShippingCost: 0,
     });
+
+    // 隐藏添加表单
     setShowAddForm(false);
   };
 

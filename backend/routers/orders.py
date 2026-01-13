@@ -782,7 +782,8 @@ def get_dashboard_financials(
             DATE(o.create_time, 'unixepoch', 'localtime') as date,
             COUNT(*) as order_count,
             SUM(COALESCE(o.total_cost, 0)) as daily_cost,
-            SUM(COALESCE(o.estimated_profit, 0)) as daily_profit
+            SUM(COALESCE(o.estimated_profit, 0)) as daily_profit,
+            SUM(COALESCE(o.estimated_revenue, 0)) as daily_revenue
         FROM orders o
         WHERE {where_str}
         GROUP BY DATE(o.create_time, 'unixepoch', 'localtime')
@@ -793,7 +794,8 @@ def get_dashboard_financials(
         financial_map[row['date']] = {
             'order_count': row['order_count'],
             'daily_cost': row['daily_cost'],
-            'daily_profit': row['daily_profit']
+            'daily_profit': row['daily_profit'],
+            'daily_revenue': row['daily_revenue']
         }
 
     # 5.2 获取每日销售额 (Item Level - 商品总额)
@@ -812,25 +814,40 @@ def get_dashboard_financials(
         sales_map[row['date']] = row['daily_sales']
 
     # 5.3 合并数据
-    all_dates = set(financial_map.keys()) | set(sales_map.keys())
-    history_data = []
+    # 5.3 合并数据 - 生成完整日期范围
+    from datetime import datetime, timedelta
     
-    for date in sorted(list(all_dates), reverse=True)[:30]:
-        fin = financial_map.get(date, {})
-        sale = sales_map.get(date, 0)
+    start_dt = datetime.fromtimestamp(start_time) if start_time else (datetime.now() - timedelta(days=29))
+    end_dt = datetime.fromtimestamp(end_time - 86400) if end_time else datetime.now() # end_time passed from frontend includes next day buffer
+    
+    # 确保日期范围按天遍历
+    history_data = []
+    current_dt = start_dt
+    while current_dt <= end_dt:
+        date_str = current_dt.strftime('%Y-%m-%d')
+        
+        fin = financial_map.get(date_str, {})
+        sale = sales_map.get(date_str, 0)
         
         daily_cost = fin.get('daily_cost', 0)
         daily_profit = fin.get('daily_profit', 0)
-        
-        # 注意：这里我们直接展示数据库算出的 daily_profit，而不是由 daily_sales - daily_cost 计算
-        # 因为 daily_sales 是原币种，daily_cost 是人民币，直接相减没有意义
+        daily_revenue = fin.get('daily_revenue', 0)
         
         history_data.append({
-            'date': date,
+            'date': date_str,
             'sales': sale or 0,
+            'revenue': daily_revenue or 0,
             'cost': daily_cost or 0,
             'profit': daily_profit or 0
         })
+        
+        current_dt += timedelta(days=1)
+    
+    # 无需再反转或切片，直接返回完整正序列表
+
+    # Debug log to check revenue data
+    if history_data:
+        print(f"DEBUG: First history item: {history_data[0]}")
 
     # 关闭数据库连接
     conn.close()

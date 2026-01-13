@@ -264,11 +264,14 @@ function OrderItemRow({ item, orderId, siteId, shopId, showDivider, onItemCostUp
 
   // Find matching cost mapping for this product
   // 严格匹配：站点、店铺、商品ID和SKU，避免错误匹配不同ID的商品
+  // Use originalItemId if available for robust matching
+  const lookupId = item.originalItemId ? String(item.originalItemId) : item.id;
+
   const matchingMapping = costMappings?.find(
     mapping =>
       mapping.siteId === siteId &&
       mapping.shopId === shopId &&
-      mapping.productId === item.id && // 商品ID必须完全匹配
+      mapping.productId === lookupId && // 商品ID (raw or compound) matches mapping
       mapping.sku === (item.sku || "") // SKU也要匹配
   );
 
@@ -301,7 +304,9 @@ function OrderItemRow({ item, orderId, siteId, shopId, showDivider, onItemCostUp
     const cost = parseFloat(purchaseCost) || 0;
     const shipping = parseFloat(domesticShippingCost) || 0;
     if (cost > 0 || shipping > 0) {
-      onSaveMapping?.(item.id, item.productName, item.sku, siteId, shopId, cost, shipping);
+      // Use originalItemId for saving mapping to ensure reusability
+      const mappingId = item.originalItemId ? String(item.originalItemId) : item.id;
+      onSaveMapping?.(mappingId, item.productName, item.sku, siteId, shopId, cost, shipping);
     }
   };
 

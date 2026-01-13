@@ -65,7 +65,7 @@ def save_mapping(mapping: MappingCreate):
 
     # 执行Upsert操作（插入或更新）
     # 使用 site_id, shop_id, item_id, sku_id 作为唯一键
-    c.execute("""
+    c.execute(f"""
         INSERT INTO cost_mappings (
             site_id, shop_id, item_id, sku_id, product_name,
             purchase_cost, domestic_shipping_cost, created_at
@@ -79,18 +79,24 @@ def save_mapping(mapping: MappingCreate):
         mapping.site_id,
         mapping.shop_id,
         mapping.item_id,
-        mapping.sku_id or "",  # SKU ID为空时使用空字符串
+        mapping.sku_id or "",  # SKU ID为空时使用空字符串,
         mapping.product_name,
         mapping.purchase_cost,
         mapping.domestic_shipping_cost,
         int(time.time())  # 当前时间戳
     ))
+    
+    # 获取ID
+    c.execute("SELECT id FROM cost_mappings WHERE site_id=? AND shop_id=? AND item_id=? AND sku_id=?", 
+             (mapping.site_id, mapping.shop_id, mapping.item_id, mapping.sku_id or ""))
+    row = c.fetchone()
+    mapping_id = row[0] if row else None
 
     # 提交事务
     conn.commit()
     conn.close()
 
-    return {"status": "success"}
+    return {"status": "success", "id": str(mapping_id)}
 
 @router.get("/api/mappings")
 def get_mappings():
@@ -116,7 +122,7 @@ def get_mappings():
     mappings = []
     for r in rows:
         mappings.append({
-            "id": r["id"],                           # 映射ID
+            "id": str(r["id"]),                       # 映射ID (转换为字符串)
             "siteId": r["site_id"],                   # 站点ID
             "shopId": r["shop_id"],                   # 店铺ID
             "productId": str(r["item_id"]),           # 商品ID（转换为字符串）
@@ -128,3 +134,15 @@ def get_mappings():
         })
 
     return mappings
+
+@router.delete("/api/mappings/{mapping_id}")
+def delete_mapping(mapping_id: int):
+    """
+    删除指定的成本映射规则
+    """
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM cost_mappings WHERE id = ?", (mapping_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
