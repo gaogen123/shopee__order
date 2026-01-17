@@ -64,11 +64,11 @@ def get_order(order_sn: str, shop_id: int = Query(494829323, description="Shop I
     init_db_tables(conn)
 
     # 从数据库查询订单数据
-    cursor = conn.cursor()
+    cursor = conn.cursor(dictionary=True)
     cursor.execute("""
-        SELECT raw_data, escrow_data, total_cost, estimated_revenue, exchange_rate, estimated_profit
+        SELECT raw_data, escrow_data, total_cost, estimated_revenue, exchange_rate, estimated_profit, refund_amount
         FROM orders
-        WHERE order_sn = ?
+        WHERE order_sn = %s
     """, (order_sn,))
     row = cursor.fetchone()
 
@@ -90,6 +90,7 @@ def get_order(order_sn: str, shop_id: int = Query(494829323, description="Shop I
         result_data['estimated_revenue'] = row['estimated_revenue'] if row['estimated_revenue'] is not None else 0
         result_data['exchange_rate'] = row['exchange_rate'] if row['exchange_rate'] is not None else 0
         result_data['estimated_profit'] = row['estimated_profit'] if row['estimated_profit'] is not None else 0
+        result_data['refund_amount'] = row['refund_amount'] if row['refund_amount'] is not None else 0
     else:
         # 订单不存在，关闭连接并返回404错误
         conn.close()
@@ -121,7 +122,7 @@ def get_order(order_sn: str, shop_id: int = Query(494829323, description="Shop I
     cursor.execute("""
         SELECT item_id, model_id, sourcing_price
         FROM order_item_costs
-        WHERE order_sn = ?
+        WHERE order_sn = %s
     """, (order_sn,))
     cost_rows = cursor.fetchall()
 
@@ -143,7 +144,7 @@ def get_order(order_sn: str, shop_id: int = Query(494829323, description="Shop I
     cursor.execute("""
         SELECT item_id, model_id, purchase_cost, domestic_shipping_cost
         FROM order_item_user_costs
-        WHERE order_sn = ?
+        WHERE order_sn = %s
     """, (order_sn,))
     user_cost_rows = cursor.fetchall()
 
@@ -184,17 +185,17 @@ def update_order_cost(order_sn: str, update: CostUpdate):
     """
     # 建立数据库连接
     conn = get_db_connection()
-    c = conn.cursor()
+    c = conn.cursor(dictionary=True)
 
     # 根据提供的更新数据更新相应的字段
     if update.cost is not None:
-        c.execute("UPDATE orders SET cost = ? WHERE order_sn = ?", (update.cost, order_sn))
+        c.execute("UPDATE orders SET cost = %s WHERE order_sn = %s", (update.cost, order_sn))
 
     # 注意：purchase_cost 和 domestic_shipping_cost 现在在商品级别，通过 update_item_costs 更新
     # 这里只更新订单级别的 total_cost
     if update.total_cost is not None:
         # 获取当前订单的预估收入和汇率
-        c.execute("SELECT estimated_revenue, exchange_rate FROM orders WHERE order_sn = ?", (order_sn,))
+        c.execute("SELECT estimated_revenue, exchange_rate FROM orders WHERE order_sn = %s", (order_sn,))
         row = c.fetchone()
         
         if row:
@@ -208,12 +209,12 @@ def update_order_cost(order_sn: str, update: CostUpdate):
             # 更新 total_cost 和 estimated_profit
             c.execute("""
                 UPDATE orders 
-                SET total_cost = ?, estimated_profit = ? 
-                WHERE order_sn = ?
+                SET total_cost = %s, estimated_profit = %s 
+                WHERE order_sn = %s
             """, (update.total_cost, estimated_profit, order_sn))
         else:
             # 如果订单不存在，只更新 total_cost
-            c.execute("UPDATE orders SET total_cost = ? WHERE order_sn = ?", (update.total_cost, order_sn))
+            c.execute("UPDATE orders SET total_cost = %s WHERE order_sn = %s", (update.total_cost, order_sn))
 
     # 提交事务
     conn.commit()
@@ -236,25 +237,25 @@ def update_item_costs(order_sn: str, updates: list[ItemCostUpdate]):
     """
     # 建立数据库连接
     conn = get_db_connection()
-    c = conn.cursor()
+    c = conn.cursor(dictionary=True)
 
     # 处理每个商品的成本更新
     for u in updates:
         # 更新 order_item_costs 表（遗留表，用于兼容性）
         c.execute("""
             INSERT INTO order_item_costs (order_sn, item_id, model_id, sourcing_price)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(order_sn, item_id, model_id) DO UPDATE SET sourcing_price=excluded.sourcing_price
+            VALUES (%s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE sourcing_price=VALUES(sourcing_price)
         """, (order_sn, u.item_id, u.model_id, u.sourcing_price))
 
         # 更新 order_item_user_costs 表中的采购成本和国内物流成本
         c.execute("""
             INSERT INTO order_item_user_costs (order_sn, item_id, model_id, purchase_cost, domestic_shipping_cost, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(order_sn, item_id, model_id) DO UPDATE SET
-                purchase_cost=excluded.purchase_cost,
-                domestic_shipping_cost=excluded.domestic_shipping_cost,
-                updated_at=excluded.updated_at
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                purchase_cost=VALUES(purchase_cost),
+                domestic_shipping_cost=VALUES(domestic_shipping_cost),
+                updated_at=VALUES(updated_at)
         """, (order_sn, u.item_id, u.model_id, u.purchase_cost, u.domestic_shipping_cost, int(time.time())))
 
     # 计算新的订单总成本
@@ -265,13 +266,13 @@ def update_item_costs(order_sn: str, updates: list[ItemCostUpdate]):
         LEFT JOIN order_item_user_costs ouic ON oi.order_sn = ouic.order_sn 
             AND oi.item_id = ouic.item_id 
             AND oi.model_id = ouic.model_id
-        WHERE oi.order_sn = ?
+        WHERE oi.order_sn = %s
     """, (order_sn,))
     
-    new_total_cost = c.fetchone()[0] or 0
+    new_total_cost = c.fetchone()['SUM((COALESCE(ouic.purchase_cost, 0) + COALESCE(ouic.domestic_shipping_cost, 0)) * oi.model_quantity_purchased)'] or 0
     
     # 获取预估收入和汇率
-    c.execute("SELECT estimated_revenue, exchange_rate FROM orders WHERE order_sn = ?", (order_sn,))
+    c.execute("SELECT estimated_revenue, exchange_rate FROM orders WHERE order_sn = %s", (order_sn,))
     order_row = c.fetchone()
     
     if order_row:
@@ -285,8 +286,8 @@ def update_item_costs(order_sn: str, updates: list[ItemCostUpdate]):
         # 更新 orders 表中的 total_cost 和 estimated_profit
         c.execute("""
             UPDATE orders 
-            SET total_cost = ?, estimated_profit = ?
-            WHERE order_sn = ?
+            SET total_cost = %s, estimated_profit = %s
+            WHERE order_sn = %s
         """, (new_total_cost, estimated_profit, order_sn))
 
     # 提交事务
@@ -304,7 +305,7 @@ def get_orders(
     time_from: int = Query(None, description="创建时间起始时间戳(Unix)，可选"),
     time_to: int = Query(None, description="创建时间结束时间戳(Unix)，可选"),
     page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100)
+    limit: int = Query(20, ge=1, le=10000)
 ):
     """
     获取订单列表，支持分页、状态筛选和关键词搜索
@@ -320,7 +321,7 @@ def get_orders(
     """
     # 建立数据库连接
     conn = get_db_connection()
-    c = conn.cursor()
+    c = conn.cursor(dictionary=True)
 
     # 构建查询条件
     where_clauses = []
@@ -328,13 +329,38 @@ def get_orders(
 
     # 店铺ID筛选条件
     if shop_id is not None:
-        where_clauses.append("shop_id = ?")
+        where_clauses.append("shop_id = %s")
         params.append(shop_id)
 
     # 站点ID筛选条件
-    if site_id is not None:
-        where_clauses.append("site_id = ?")
-        params.append(site_id)
+    if site_id is not None and site_id != 'all':
+        # 导入店铺配置来获取站点下的店铺ID列表
+        import sys
+        from pathlib import Path
+        TEST_DIR = Path(__file__).resolve().parent.parent / "test" / "shop_test"
+        if str(TEST_DIR) not in sys.path:
+            sys.path.append(str(TEST_DIR))
+
+        from token_manager import ALL_SHOPS
+
+        # 获取指定站点下的所有店铺ID
+        site_shop_ids = []
+        for shop in ALL_SHOPS:
+            if shop.get('region') == site_id:
+                site_shop_ids.append(shop['id'])
+
+        if site_shop_ids:
+            placeholders = ','.join(['%s'] * len(site_shop_ids))
+            where_clauses.append(f"shop_id IN ({placeholders})")
+            params.extend(site_shop_ids)
+        else:
+            # 如果站点下没有店铺，返回空结果
+            return {
+                "total": 0,
+                "page": page,
+                "limit": limit,
+                "orders": []
+            }
 
     # 状态筛选条件
     if status and status != 'ALL':
@@ -343,20 +369,20 @@ def get_orders(
             where_clauses.append("order_status IN ('CANCELLED', 'TO_RETURN')")
         else:
             # 其他状态直接匹配
-            where_clauses.append("order_status = ?")
+            where_clauses.append("order_status = %s")
             params.append(status)
 
     # 时间范围筛选条件
     if time_from is not None:
-        where_clauses.append("create_time >= ?")
+        where_clauses.append("create_time >= %s")
         params.append(time_from)
     if time_to is not None:
-        where_clauses.append("create_time <= ?")
+        where_clauses.append("create_time <= %s")
         params.append(time_to)
 
     # 关键词搜索条件（订单号或买家用户名）
     if keyword:
-        where_clauses.append("(order_sn LIKE ? OR buyer_username LIKE ?)")
+        where_clauses.append("(order_sn LIKE %s OR buyer_username LIKE %s)")
         params.append(f"%{keyword}%")
         params.append(f"%{keyword}%")
 
@@ -364,18 +390,18 @@ def get_orders(
     where_str = " AND ".join(where_clauses) if where_clauses else "1=1"
 
     # 查询总记录数
-    c.execute(f"SELECT count(*) FROM orders WHERE {where_str}", params)
-    total = c.fetchone()[0]
+    c.execute(f"SELECT count(*) as cnt FROM orders WHERE {where_str}", params)
+    total = c.fetchone()['cnt']
 
     # 构建分页查询语句 - 包含 estimated_revenue, exchange_rate, estimated_profit
     query = f"""
         SELECT raw_data, order_sn, order_status, total_amount, currency, create_time,
                buyer_username, shop_id, estimated_shipping_fee, total_cost, escrow_data,
-               estimated_revenue, exchange_rate, estimated_profit
+               estimated_revenue, exchange_rate, estimated_profit, refund_amount
         FROM orders
         WHERE {where_str}
         ORDER BY create_time DESC
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
     """
     # 添加分页参数
     params.append(limit)  # 每页数量
@@ -416,6 +442,7 @@ def get_orders(
         order['estimated_revenue'] = r['estimated_revenue'] if r['estimated_revenue'] is not None else 0
         order['exchange_rate'] = r['exchange_rate'] if r['exchange_rate'] is not None else 0
         order['estimated_profit'] = r['estimated_profit'] if r['estimated_profit'] is not None else 0
+        order['refund_amount'] = r['refund_amount'] if r['refund_amount'] is not None else 0
 
         # 从托管数据计算财务信息
         escrow_info = {}
@@ -434,13 +461,13 @@ def get_orders(
 
         # 计算订单收入（优先级：API直接提供 > 买家支付总额-费用 > 订单总额）
         order_income = escrow_info.get('order_income_amount')
-        if order_income is None:
-            # 如果没有直接的收入字段，使用买家支付总额减去费用
-            if escrow_info.get('buyer_total_amount'):
-                order_income = float(escrow_info.get('buyer_total_amount')) - total_fees
-            else:
-                # 最后的备选方案：使用订单总额
-                order_income = r['total_amount']
+        # if order_income is None:
+        #     # 如果没有直接的收入字段，使用买家支付总额减去费用
+        #     if escrow_info.get('buyer_total_amount'):
+        #         order_income = float(escrow_info.get('buyer_total_amount')) - total_fees
+        #     else:
+        #         # 最后的备选方案：使用订单总额
+        #         order_income = r['total_amount']
 
         # 构建财务信息字典
         order['financials'] = {
@@ -459,7 +486,7 @@ def get_orders(
             SELECT item_id, order_item_id, item_name, model_id, model_name, model_sku, model_quantity_purchased,
                    model_discounted_price, image_info
             FROM order_items
-            WHERE order_sn = ?
+            WHERE order_sn = %s
         """, (r['order_sn'],))
         items_rows = c.fetchall()
 
@@ -467,7 +494,7 @@ def get_orders(
         c.execute("""
             SELECT item_id, model_id, purchase_cost, domestic_shipping_cost
             FROM order_item_user_costs
-            WHERE order_sn = ?
+            WHERE order_sn = %s
         """, (r['order_sn'],))
         cost_rows = c.fetchall()
 
@@ -548,7 +575,7 @@ def get_order_stats(
     # 建立数据库连接并初始化表结构
     conn = get_db_connection()
     init_db_tables(conn)
-    c = conn.cursor()
+    c = conn.cursor(dictionary=True)
 
     # 构建查询条件
     where_clauses = []
@@ -572,7 +599,7 @@ def get_order_stats(
                 site_shop_ids.append(shop['id'])
 
         if site_shop_ids:
-            placeholders = ','.join('?' * len(site_shop_ids))
+            placeholders = ','.join(['%s'] * len(site_shop_ids))
             where_clauses.append(f"shop_id IN ({placeholders})")
             params.extend(site_shop_ids)
         else:
@@ -587,20 +614,20 @@ def get_order_stats(
 
     # 店铺筛选条件
     if shop_id is not None:
-        where_clauses.append("shop_id = ?")
+        where_clauses.append("shop_id = %s")
         params.append(shop_id)
 
     # 状态筛选条件 - 直接使用Shopee原始状态
     if status is not None and status != 'all':
-        where_clauses.append("order_status = ?")
+        where_clauses.append("order_status = %s")
         params.append(status)
 
     # 时间范围筛选条件
     if start_time is not None:
-        where_clauses.append("create_time >= ?")
+        where_clauses.append("create_time >= %s")
         params.append(start_time)
     if end_time is not None:
-        where_clauses.append("create_time <= ?")
+        where_clauses.append("create_time <= %s")
         params.append(end_time)
 
     # 构建WHERE子句
@@ -608,7 +635,7 @@ def get_order_stats(
 
     # 查询总订单数
     c.execute(f"SELECT count(*) as cnt FROM orders WHERE {where_str}", params)
-    total = c.fetchone()[0]
+    total = c.fetchone()['cnt']
 
     # 按订单状态分组统计数量
     c.execute(f"SELECT order_status, count(*) as cnt FROM orders WHERE {where_str} GROUP BY order_status", params)
@@ -626,13 +653,18 @@ def get_order_stats(
         # 记录每个原始状态的数量
         status_counts[raw_status] = cnt
 
+    # 统计退货退款（已完成）订单数量 - refund_amount > 0 的订单
+    c.execute(f"SELECT count(*) as cnt FROM orders WHERE {where_str} AND refund_amount > 0", params)
+    refund_completed_count = c.fetchone()['cnt']
+
     # 关闭数据库连接
     conn.close()
 
     # 返回统计结果
     return {
         "total": total,             # 总订单数
-        "status_counts": status_counts  # 各状态订单数
+        "status_counts": status_counts,  # 各状态订单数
+        "refund_completed": refund_completed_count  # 退货退款（已完成）订单数
     }
 
 @router.get("/api/dashboard/financials")
@@ -659,7 +691,7 @@ def get_dashboard_financials(
     # 建立数据库连接并初始化表结构
     conn = get_db_connection()
     init_db_tables(conn)
-    c = conn.cursor()
+    c = conn.cursor(dictionary=True)
 
     # 构建查询条件
     where_clauses = []
@@ -683,7 +715,7 @@ def get_dashboard_financials(
                 site_shop_ids.append(shop['id'])
 
         if site_shop_ids:
-            placeholders = ','.join('?' * len(site_shop_ids))
+            placeholders = ','.join(['%s'] * len(site_shop_ids))
             where_clauses.append(f"o.shop_id IN ({placeholders})")
             params.extend(site_shop_ids)
         else:
@@ -696,20 +728,20 @@ def get_dashboard_financials(
 
     # 店铺筛选条件
     if shop_id is not None:
-        where_clauses.append("o.shop_id = ?")
+        where_clauses.append("o.shop_id = %s")
         params.append(shop_id)
 
     # 状态筛选条件 - 直接使用Shopee原始状态
     if status is not None and status != 'all':
-        where_clauses.append("o.order_status = ?")
+        where_clauses.append("o.order_status = %s")
         params.append(status)
 
     # 时间范围筛选条件
     if start_time is not None:
-        where_clauses.append("o.create_time >= ?")
+        where_clauses.append("o.create_time >= %s")
         params.append(start_time)
     if end_time is not None:
-        where_clauses.append("o.create_time <= ?")
+        where_clauses.append("o.create_time <= %s")
         params.append(end_time)
 
     # 构建WHERE子句
@@ -779,19 +811,21 @@ def get_dashboard_financials(
     # 5.1 获取每日成本、利润和订单数 (Order Level)
     c.execute(f"""
         SELECT
-            DATE(o.create_time, 'unixepoch', 'localtime') as date,
+            DATE(FROM_UNIXTIME(o.create_time)) as date,
             COUNT(*) as order_count,
             SUM(COALESCE(o.total_cost, 0)) as daily_cost,
             SUM(COALESCE(o.estimated_profit, 0)) as daily_profit,
             SUM(COALESCE(o.estimated_revenue, 0)) as daily_revenue
         FROM orders o
         WHERE {where_str}
-        GROUP BY DATE(o.create_time, 'unixepoch', 'localtime')
+        GROUP BY DATE(FROM_UNIXTIME(o.create_time))
     """, params)
     
     financial_map = {}
     for row in c.fetchall():
-        financial_map[row['date']] = {
+        # MySQL Connector 可能返回 datetime.date 对象，转换为字符串
+        date_key = str(row['date'])
+        financial_map[date_key] = {
             'order_count': row['order_count'],
             'daily_cost': row['daily_cost'],
             'daily_profit': row['daily_profit'],
@@ -801,17 +835,18 @@ def get_dashboard_financials(
     # 5.2 获取每日销售额 (Item Level - 商品总额)
     c.execute(f"""
         SELECT
-            DATE(o.create_time, 'unixepoch', 'localtime') as date,
+            DATE(FROM_UNIXTIME(o.create_time)) as date,
             SUM(oi.model_discounted_price * oi.model_quantity_purchased) as daily_sales
         FROM orders o
         JOIN order_items oi ON o.order_sn = oi.order_sn
         WHERE {where_str}
-        GROUP BY DATE(o.create_time, 'unixepoch', 'localtime')
+        GROUP BY DATE(FROM_UNIXTIME(o.create_time))
     """, params)
     
     sales_map = {}
     for row in c.fetchall():
-        sales_map[row['date']] = row['daily_sales']
+        date_key = str(row['date'])
+        sales_map[date_key] = row['daily_sales']
 
     # 5.3 合并数据
     # 5.3 合并数据 - 生成完整日期范围

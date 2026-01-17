@@ -159,6 +159,7 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                         IN_CANCEL: statsData?.status_counts?.IN_CANCEL || 0,
                         CANCELLED: statsData?.status_counts?.CANCELLED || 0,
                         TO_RETURN: statsData?.status_counts?.TO_RETURN || 0,
+                        REFUND_COMPLETED: statsData?.refund_completed || 0,  // 退货退款（已完成）
                         cost_entered: financialsData?.summary?.orders_with_cost || 0,
                         cost_not_entered: (financialsData?.summary?.total_orders || 0) - (financialsData?.summary?.orders_with_cost || 0)
                     },
@@ -190,6 +191,7 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                         IN_CANCEL: 0,
                         CANCELLED: 0,
                         TO_RETURN: 0,
+                        REFUND_COMPLETED: 0,
                         cost_entered: 0,
                         cost_not_entered: 0
                     },
@@ -335,6 +337,12 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
             value: stats?.orders?.TO_RETURN || 0,
             icon: AlertCircle,
             color: 'red'
+        },
+        {
+            title: '退货退款',
+            value: stats?.orders?.REFUND_COMPLETED || 0,
+            icon: AlertCircle,
+            color: 'orange'
         }
     ];
 
