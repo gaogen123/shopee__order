@@ -478,7 +478,16 @@ import { Sidebar } from "./components/Sidebar";
 export default function App() {
   const [currentView, setCurrentView] = useState<'dashboard' | 'orders' | 'mappings'>('dashboard');
   const [searchQuery, setSearchQuery] = useState("");
-  const [dateRange, setDateRange] = useState("2025-12-30 至 2026-01-06");
+
+  // Default date range: Last 30 days
+  const [dateRange, setDateRange] = useState(() => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - 30);
+    const formatDate = (d: Date) => d.toISOString().split('T')[0];
+    return `${formatDate(start)} 至 ${formatDate(end)}`;
+  });
+
   const [showFilters, setShowFilters] = useState(false);
   const [activeStatus, setActiveStatus] = useState("all");
   const [selectedSite, setSelectedSite] = useState("all");
@@ -523,7 +532,27 @@ export default function App() {
   // Fetch orders from API
   const fetchOrders = () => {
     setIsLoadingOrders(true);
-    fetch('http://localhost:9000/api/orders?limit=100')
+
+    // Parse date range
+    let timeParams = "";
+    if (dateRange) {
+      const parts = dateRange.split(" 至 ");
+      if (parts.length === 2) {
+        const startDate = new Date(parts[0]);
+        const endDate = new Date(parts[1]);
+        // Set end date to end of day
+        endDate.setHours(23, 59, 59, 999);
+
+        const timeFrom = Math.floor(startDate.getTime() / 1000);
+        const timeTo = Math.floor(endDate.getTime() / 1000);
+        timeParams = `&time_from=${timeFrom}&time_to=${timeTo}`;
+      }
+    }
+
+    // Append search query if present
+    const searchParam = searchQuery ? `&keyword=${encodeURIComponent(searchQuery)}` : "";
+
+    fetch(`http://localhost:9000/api/orders?limit=10000${timeParams}${searchParam}`)
       .then(res => res.json())
       .then(data => {
         if (data.orders) {
@@ -630,7 +659,8 @@ export default function App() {
               estimatedProfit: apiOrder.estimated_profit,   // 直接使用后端返回的预估利润
               manualTotalCost: apiOrder.total_cost || undefined, // 采购总成本（订单级别）
               currency: currency,
-              exchangeRate: apiOrder.exchange_rate || exchangeRate // 优先使用后端返回的汇率
+              exchangeRate: apiOrder.exchange_rate || exchangeRate, // 优先使用后端返回的汇率
+              refundAmount: apiOrder.refund_amount || 0 // 退款金额
             };
           });
           setOrders(transformedOrders);
@@ -645,7 +675,7 @@ export default function App() {
 
   useEffect(() => {
     fetchOrders();
-  }, [shopOptions]);
+  }, [shopOptions, dateRange, searchQuery]);
 
   // Helper function to check if an order has cost recorded
   const hasOrderCostRecorded = (order: Order): boolean => {

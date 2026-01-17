@@ -38,6 +38,7 @@ export interface Order {
   estimatedProfit?: number;  // 预估利润 (RMB)
   currency?: string; // 币种
   exchangeRate?: number; // 汇率
+  refundAmount?: number; // 退款金额
 }
 
 interface OrderCardProps {
@@ -130,6 +131,12 @@ export function OrderCard({ order, onViewDetails, onItemCostUpdate, onOrderTotal
               >
                 {order.statusText}
               </Badge>
+              {/* 退款标记 */}
+              {order.refundAmount && order.refundAmount > 0 && (
+                <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 font-medium">
+                  退款
+                </Badge>
+              )}
             </div>
           </div>
           <button
