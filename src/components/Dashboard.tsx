@@ -33,6 +33,14 @@ interface DashboardStats {
     }[];
 }
 
+interface MonthlyStat {
+    month: string;
+    order_count: number;
+    total_sales: number;
+    total_cost: number;
+    total_profit: number;
+}
+
 interface RecentOrder {
     order_sn: string;
     order_status: string;
@@ -60,6 +68,7 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
     const [endDate, setEndDate] = useState(today.toISOString().split('T')[0]);
 
     const [stats, setStats] = useState<DashboardStats | null>(null);
+    const [monthlyStats, setMonthlyStats] = useState<MonthlyStat[]>([]);
     const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
 
     const [visibleSeries, setVisibleSeries] = useState<{ [key: string]: boolean }>({
@@ -70,11 +79,12 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
     });
 
     const [loading, setLoading] = useState(false);
+    const [monthlyMetric, setMonthlyMetric] = useState<'order_count' | 'total_sales' | 'total_cost' | 'total_profit'>('total_sales');
 
     // Pagination state
     const [currentPage, setCurrentPage] = useState(1);
     const [totalOrders, setTotalOrders] = useState(0);
-    const itemsPerPage = 10;
+    const [itemsPerPage, setItemsPerPage] = useState(10);
 
     // Dynamic Sites/Shops
     const [sites, setSites] = useState<{ value: string, label: string }[]>([]);
@@ -208,6 +218,9 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
             // Fetch Orders
             fetchRecentOrders();
 
+            // Fetch Monthly Stats
+            fetchMonthlyStats();
+
         } catch (error) {
             console.error("Failed to fetch dashboard stats", error);
         } finally {
@@ -253,16 +266,38 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
         }
     };
 
+    const fetchMonthlyStats = async () => {
+        try {
+            const params = new URLSearchParams();
+            if (selectedStore !== 'all') params.append('shop_id', selectedStore);
+            if (selectedSite !== 'all') params.append('site_id', selectedSite);
+
+            const res = await fetch(`http://localhost:9000/api/dashboard/monthly_stats?${params.toString()}`);
+            if (res.ok) {
+                const data = await res.json();
+                setMonthlyStats(data);
+            }
+        } catch (error) {
+            console.error("Failed to fetch monthly stats", error);
+        }
+    };
+
     // Trigger stats fetch on filters change
     useEffect(() => {
         setCurrentPage(1); // Reset page on filter change
         fetchStats();
+        fetchMonthlyStats();
     }, [startDate, endDate, selectedStore, selectedSite, selectedStatus]);
 
     // Trigger orders fetch on page change or filters change
     useEffect(() => {
         fetchRecentOrders();
-    }, [currentPage, startDate, endDate, selectedStore, selectedSite, selectedStatus]);
+    }, [currentPage, itemsPerPage, startDate, endDate, selectedStore, selectedSite, selectedStatus]);
+
+    // Reset page when items per page changes
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [itemsPerPage]);
 
 
     // Format currency - 显示当地货币
@@ -654,6 +689,66 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                 </div>
             </div>
 
+            {/* Monthly Stats Chart */}
+            <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-base font-semibold text-gray-900">近半年已完成订单月度统计</h3>
+                    <div className="flex gap-2">
+                        {[
+                            { key: 'total_sales', label: '总销售额' },
+                            { key: 'total_profit', label: '总利润' },
+                            { key: 'total_cost', label: '总成本' },
+                            { key: 'order_count', label: '订单数' }
+                        ].map(metric => (
+                            <button
+                                key={metric.key}
+                                onClick={() => setMonthlyMetric(metric.key as any)}
+                                className={`px-3 py-1 text-sm rounded-full transition-colors ${monthlyMetric === metric.key
+                                    ? 'bg-blue-100 text-blue-700 font-medium'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                    }`}
+                            >
+                                {metric.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={monthlyStats}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                        <YAxis tick={{ fontSize: 12 }} />
+                        <Tooltip
+                            formatter={(value: number, name: string) => {
+                                const labels: any = {
+                                    order_count: '订单数',
+                                    total_sales: '总销售额',
+                                    total_cost: '总成本',
+                                    total_profit: '总利润'
+                                };
+                                return [
+                                    name === 'order_count' ? value : `¥${value.toFixed(2)}`,
+                                    labels[name] || name
+                                ];
+                            }}
+                        />
+                        <Legend />
+                        {monthlyMetric === 'order_count' && (
+                            <Bar dataKey="order_count" name="订单数" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                        )}
+                        {monthlyMetric === 'total_sales' && (
+                            <Bar dataKey="total_sales" name="总销售额" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                        )}
+                        {monthlyMetric === 'total_cost' && (
+                            <Bar dataKey="total_cost" name="总成本" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                        )}
+                        {monthlyMetric === 'total_profit' && (
+                            <Bar dataKey="total_profit" name="总利润" fill="#10b981" radius={[4, 4, 0, 0]} />
+                        )}
+                    </BarChart>
+                </ResponsiveContainer>
+            </div>
+
             {/* Recent Orders Section */}
             <div className="bg-white rounded-lg border border-gray-200 p-6">
                 <div className="flex justify-between items-center mb-6">
@@ -787,7 +882,7 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                 </div>
 
                 {/* Pagination */}
-                {totalOrders > itemsPerPage && (
+                {totalOrders > 0 && (
                     <div className="mt-4 border-t border-gray-100 pt-4">
                         <Pagination
                             currentPage={currentPage}
@@ -795,10 +890,12 @@ export function Dashboard({ onViewOrder }: DashboardProps) {
                             totalItems={totalOrders}
                             itemsPerPage={itemsPerPage}
                             onPageChange={setCurrentPage}
+                            onItemsPerPageChange={setItemsPerPage}
+                            pageSizeOptions={[10, 20, 30, 50, 100]}
                         />
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 }

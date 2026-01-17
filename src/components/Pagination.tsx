@@ -7,14 +7,18 @@ interface PaginationProps {
   totalItems: number;
   itemsPerPage: number;
   onPageChange: (page: number) => void;
+  onItemsPerPageChange?: (pageSize: number) => void;
+  pageSizeOptions?: number[];
 }
 
-export function Pagination({ 
-  currentPage, 
-  totalPages, 
+export function Pagination({
+  currentPage,
+  totalPages,
   totalItems,
   itemsPerPage,
-  onPageChange 
+  onPageChange,
+  onItemsPerPageChange,
+  pageSizeOptions = [10, 20, 30, 50, 100]
 }: PaginationProps) {
   const startItem = totalItems === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
   const endItem = Math.min(currentPage * itemsPerPage, totalItems);
@@ -22,7 +26,7 @@ export function Pagination({
   const getPageNumbers = () => {
     const pages: (number | string)[] = [];
     const showPages = 5; // 显示的页码数量
-    
+
     if (totalPages <= showPages) {
       // 如果总页数小于等于显示数量，显示全部
       for (let i = 1; i <= totalPages; i++) {
@@ -31,37 +35,37 @@ export function Pagination({
     } else {
       // 总是显示第一页
       pages.push(1);
-      
+
       // 计算中间显示的页码
       let startPage = Math.max(2, currentPage - 1);
       let endPage = Math.min(totalPages - 1, currentPage + 1);
-      
+
       // 调整显示范围
       if (currentPage <= 3) {
         endPage = 4;
       } else if (currentPage >= totalPages - 2) {
         startPage = totalPages - 3;
       }
-      
+
       // 添加省略号
       if (startPage > 2) {
         pages.push('...');
       }
-      
+
       // 添加中间页码
       for (let i = startPage; i <= endPage; i++) {
         pages.push(i);
       }
-      
+
       // 添加省略号
       if (endPage < totalPages - 1) {
         pages.push('...');
       }
-      
+
       // 总是显示最后一页
       pages.push(totalPages);
     }
-    
+
     return pages;
   };
 
@@ -159,8 +163,26 @@ export function Pagination({
         </Button>
       </div>
 
-      {/* 右侧：占位保持平衡 */}
-      <div className="flex-1"></div>
+      {/* 右侧：每页数量选择 */}
+      <div className="flex-1 flex justify-end items-center gap-2">
+        {onItemsPerPageChange && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>每页显示</span>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
+              className="h-8 w-16 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              {pageSizeOptions.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+            <span>条</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

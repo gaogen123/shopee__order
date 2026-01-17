@@ -7,7 +7,7 @@ import hashlib
 from token_manager import get_valid_token, PARTNER_ID, PARTNER_KEY, HOST
 
 SHOP_ID = 494829323
-ORDER_SN = "2512114B1GNREJ"
+ORDER_SN = "2511062BHP007M"
 
 def generate_shop_sign(path, timestamp, access_token, shop_id):
     base_string = f"{PARTNER_ID}{path}{timestamp}{access_token}{shop_id}"

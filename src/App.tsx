@@ -515,7 +515,7 @@ export default function App() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoadingOrders, setIsLoadingOrders] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5; // 每页显示5个订单
+  const [itemsPerPage, setItemsPerPage] = useState(20); // Default 20 items per page
   const [sortField, setSortField] = useState<SortField>('none');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -707,10 +707,15 @@ export default function App() {
       shipped: 0,
       completed: 0,
       cancelled: 0,
+      refund: 0,  // 退款订单数量
     };
 
     filteredByLocation.forEach(order => {
       counts[order.status] = (counts[order.status] || 0) + 1;
+      // 统计有退款金额的订单
+      if (order.refundAmount && order.refundAmount > 0) {
+        counts.refund = (counts.refund || 0) + 1;
+      }
     });
 
     return counts;
@@ -773,7 +778,12 @@ export default function App() {
 
     // Filter by status
     if (activeStatus !== 'all') {
-      filtered = filtered.filter(order => order.status === activeStatus);
+      if (activeStatus === 'refund') {
+        // 退款状态：筛选 refundAmount > 0 的订单
+        filtered = filtered.filter((order: Order) => order.refundAmount && order.refundAmount > 0);
+      } else {
+        filtered = filtered.filter((order: Order) => order.status === activeStatus);
+      }
     }
 
     // Filter by cost status
@@ -1418,6 +1428,8 @@ export default function App() {
                     totalItems={filteredOrders.length}
                     itemsPerPage={itemsPerPage}
                     onPageChange={handlePageChange}
+                    onItemsPerPageChange={setItemsPerPage}
+                    pageSizeOptions={[10, 20, 30, 50, 100]}
                   />
                 </div>
               )}

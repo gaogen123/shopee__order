@@ -12,6 +12,7 @@ export function StatusFilter({ activeStatus, onStatusChange, statusCounts }: Sta
     { value: 'shipped', label: '运送中', color: 'text-purple-600' },
     { value: 'completed', label: '已完成', color: 'text-green-600' },
     { value: 'cancelled', label: '退货/退款/取消', color: 'text-gray-600' },
+    { value: 'refund', label: '退款', color: 'text-red-600' },
   ];
 
   return (

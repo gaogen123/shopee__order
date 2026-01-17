@@ -907,3 +907,143 @@ def get_dashboard_financials(
         },
         "history": history_data
     }
+
+@router.get("/api/dashboard/monthly_stats")
+def get_monthly_stats(
+    shop_id: int = Query(None, description="店铺ID筛选，可选"),
+    site_id: str = Query(None, description="站点ID筛选，可选")
+):
+    """
+    获取近6个月的月度统计数据
+    """
+    conn = get_db_connection()
+    c = conn.cursor(dictionary=True)
+
+    where_clauses = []
+    params = []
+
+    # 站点筛选
+    if site_id is not None and site_id != 'all':
+        import sys
+        from pathlib import Path
+        TEST_DIR = Path(__file__).resolve().parent.parent / "test" / "shop_test"
+        if str(TEST_DIR) not in sys.path:
+            sys.path.append(str(TEST_DIR))
+        from token_manager import ALL_SHOPS
+        site_shop_ids = []
+        for shop in ALL_SHOPS:
+            if shop.get('region') == site_id:
+                site_shop_ids.append(shop['id'])
+        if site_shop_ids:
+            placeholders = ','.join(['%s'] * len(site_shop_ids))
+            where_clauses.append(f"o.shop_id IN ({placeholders})")
+            params.extend(site_shop_ids)
+        else:
+            return []
+
+    # 店铺筛选
+    if shop_id is not None:
+        where_clauses.append("o.shop_id = %s")
+        params.append(shop_id)
+
+    # 时间筛选：近6个月
+    from datetime import datetime
+    
+    today = datetime.now()
+    year = today.year
+    month = today.month
+    
+    # Calculate start year/month (go back 5 months to include current month = 6 months total)
+    start_month = month - 5
+    start_year = year
+    if start_month <= 0:
+        start_month += 12
+        start_year -= 1
+    
+    start_date = datetime(start_year, start_month, 1)
+    start_ts = int(start_date.timestamp())
+    
+    where_clauses.append("o.create_time >= %s")
+    params.append(start_ts)
+
+    # Filter for completed orders only
+    where_clauses.append("o.order_status = 'COMPLETED'")
+
+    where_str = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+    # 1. 获取每月订单数、总成本、总利润 (Order Level)
+    c.execute(f"""
+        SELECT
+            DATE_FORMAT(FROM_UNIXTIME(o.create_time), '%Y-%m') as month,
+            COUNT(*) as order_count,
+            SUM(COALESCE(o.total_cost, 0)) as total_cost,
+            SUM(COALESCE(o.estimated_profit, 0)) as total_profit
+        FROM orders o
+        WHERE {where_str}
+        GROUP BY DATE_FORMAT(FROM_UNIXTIME(o.create_time), '%Y-%m')
+    """, params)
+    
+    monthly_data = {}
+    for row in c.fetchall():
+        month_str = row['month']
+        monthly_data[month_str] = {
+            'month': month_str,
+            'order_count': row['order_count'],
+            'total_cost': row['total_cost'],
+            'total_profit': row['total_profit'],
+            'total_sales': 0 # Placeholder
+        }
+
+    # 2. 获取每月销售额 (Item Level)
+    c.execute(f"""
+        SELECT
+            DATE_FORMAT(FROM_UNIXTIME(o.create_time), '%Y-%m') as month,
+            SUM(oi.model_discounted_price * oi.model_quantity_purchased) as total_sales
+        FROM orders o
+        JOIN order_items oi ON o.order_sn = oi.order_sn
+        WHERE {where_str}
+        GROUP BY DATE_FORMAT(FROM_UNIXTIME(o.create_time), '%Y-%m')
+    """, params)
+
+    for row in c.fetchall():
+        month_str = row['month']
+        if month_str in monthly_data:
+            monthly_data[month_str]['total_sales'] = row['total_sales']
+        else:
+            monthly_data[month_str] = {
+                'month': month_str,
+                'order_count': 0,
+                'total_cost': 0,
+                'total_profit': 0,
+                'total_sales': row['total_sales']
+            }
+
+    conn.close()
+
+    # Fill in missing months
+    result = []
+    
+    # Generate list of months from start_date to today
+    curr_year = start_year
+    curr_month = start_month
+    
+    while (curr_year < year) or (curr_year == year and curr_month <= month):
+        month_str = f"{curr_year}-{curr_month:02d}"
+        
+        if month_str in monthly_data:
+            result.append(monthly_data[month_str])
+        else:
+            result.append({
+                'month': month_str,
+                'order_count': 0,
+                'total_cost': 0,
+                'total_profit': 0,
+                'total_sales': 0
+            })
+            
+        curr_month += 1
+        if curr_month > 12:
+            curr_month = 1
+            curr_year += 1
+
+    return result

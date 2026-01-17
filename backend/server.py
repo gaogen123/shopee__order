@@ -3,6 +3,18 @@ from pathlib import Path
 import threading
 import uuid
 import time
+import logging
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(Path(__file__).resolve().parent / 'server.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Add the test/shop_test directory to sys.path to import token_manager
 # Assuming server.py is in backend/ and token_manager is in backend/test/shop_test/
@@ -73,13 +85,56 @@ app.include_router(sync_router)
 app.include_router(mappings_router)
 app.include_router(shops_router)
 
+def refresh_all_shop_tokens():
+    """
+    刷新所有店铺的 Token
+    """
+    try:
+        # 动态导入刷新脚本
+        import importlib.util
+        refresh_script = TEST_DIR / "refresh_all_tokens.py"
+        spec = importlib.util.spec_from_file_location("refresh_all_tokens", refresh_script)
+        refresh_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(refresh_module)
+
+        # 运行刷新任务
+        logger.info("正在刷新所有店铺 Token...")
+        refresh_module.main()
+        logger.info("店铺 Token 刷新完成")
+    except Exception as e:
+        logger.error(f"刷新店铺 Token 时出错: {e}")
+
+
+def scheduled_token_refresh():
+    """
+    定时刷新 Token 的后台任务
+    启动时立即执行一次，然后每2小时执行一次
+    """
+    # 启动时立即刷新一次
+    refresh_all_shop_tokens()
+
+    # 定时刷新间隔：2小时 = 7200秒
+    REFRESH_INTERVAL = 2 * 60 * 60
+
+    while True:
+        time.sleep(REFRESH_INTERVAL)
+        logger.info("[定时任务] 开始定时刷新店铺 Token...")
+        refresh_all_shop_tokens()
+
+
 if __name__ == "__main__":
-    print("Server starting with LATEST FINANCIAL LOGIC (Merged Escrow + Tax)...")
+    logger.info("Server starting with LATEST FINANCIAL LOGIC (Merged Escrow + Tax)...")
     # Initialize database tables
     conn = get_db_connection()
     init_db_tables(conn)
     conn.close()
-    print("Database tables initialized")
+    logger.info("Database tables initialized")
+
+    # 启动定时刷新 Token 的后台线程
+    token_refresh_thread = threading.Thread(target=scheduled_token_refresh, daemon=True)
+    token_refresh_thread.start()
+    logger.info("Token 定时刷新任务已启动（每2小时执行一次）")
+
     import uvicorn
     # Run on 0.0.0.0:9000
     uvicorn.run(app, host="0.0.0.0", port=9000)

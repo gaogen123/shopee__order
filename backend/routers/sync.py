@@ -96,7 +96,18 @@ def fetch_order_list_from_api(shop_id, time_from, time_to):
     current_from = time_from
     while current_from < time_to:
         # 计算当前时间段的结束时间（不超过15天）
-        current_to = min(current_from + MAX_RANGE, time_to)
+        # 注意：time_to 已经是 23:59:59
+        # 如果 current_from + MAX_RANGE 小于 time_to，说明还需要分段
+        # 此时 current_to 应该是一个中间日期的 23:59:59，以保证无缝衔接且不重叠
+        # 但为了简单起见，我们直接加 MAX_RANGE，并在打印时格式化
+        
+        next_step = current_from + MAX_RANGE
+        current_to = min(next_step, time_to)
+        
+        # 打印当前切分的时间段（精确到时分秒）
+        from datetime import datetime
+        fmt = "%Y-%m-%d %H:%M:%S"
+        print(f"正在同步时间段: {datetime.fromtimestamp(current_from).strftime(fmt)} -> {datetime.fromtimestamp(current_to).strftime(fmt)}")
 
         cursor = ""  # 分页游标
         while True:
@@ -148,7 +159,8 @@ def fetch_order_list_from_api(shop_id, time_from, time_to):
                 break
 
         # 移动到下一个15天的时段（无缝连接，避免遗漏订单）
-        current_from = current_to
+        # 下一段的开始应该是上一段结束的下一秒
+        current_from = current_to + 1
 
     return all_order_sns
 
@@ -274,21 +286,26 @@ def get_order_sns_to_sync(time_from: int, time_to: int, shop_id: int = 494829323
 @router.post("/api/sync_orders")
 def sync_orders(req: SyncRequest):
     """
-    启动时间范围内的订单同步任务
+    Starts an order synchronization task within a specified time range
 
-    创建后台异步任务来同步指定时间范围内的所有订单数据。
-    这个过程可能需要很长时间，因此使用后台任务处理。
+    Creates a background asynchronous task to synchronize all order data within the specified time range.
+    This process may take a long time, so a background task is used for handling.
 
     Args:
-        req (SyncRequest): 同步请求，包含时间范围和店铺ID
+        req (SyncRequest): Synchronization request, containing time range and shop ID
 
     Returns:
-        dict: 包含任务ID的响应 {"status": "accepted", "task_id": "uuid"}
+        dict: Response containing the task ID {"status": "accepted", "task_id": "uuid"}
     """
-    # 生成唯一的任务ID
+    # 修正结束时间：前端传递的可能是当天的起始时间 (00:00:00)
+    # 为了包含当天的订单，我们需要将结束时间延长到当天的最后一秒 (23:59:59)
+    # 即 + 23小时59分59秒 = 86399秒
+    adjusted_time_to = req.time_to + 86399
+
+    # Generate a unique task ID
     task_id = str(uuid.uuid4())
 
-    # 初始化任务状态
+    # Initialize task status
     SYNC_TASKS[task_id] = {
         "task_id": task_id,
         "status": "starting",
@@ -297,10 +314,10 @@ def sync_orders(req: SyncRequest):
         "count": 0
     }
 
-    # 启动后台线程执行同步任务
+    # Start a background thread to execute the synchronization task
     thread = threading.Thread(
         target=run_sync_task,
-        args=(task_id, req.shop_id, req.time_from, req.time_to)
+        args=(task_id, req.shop_id, req.time_from, adjusted_time_to)
     )
     thread.start()
 

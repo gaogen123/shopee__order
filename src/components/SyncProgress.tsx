@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { Progress } from "./ui/progress";
-import { CheckCircle2, RefreshCw, AlertCircle } from "lucide-react";
+import { CheckCircle2, RefreshCw, AlertCircle, X } from "lucide-react";
 import { toast } from "sonner";
 
 interface SyncProgressProps {
@@ -26,20 +26,14 @@ export function SyncProgress({ isVisible, taskId, onComplete }: SyncProgressProp
   }, []);
 
   useEffect(() => {
-    if (!isVisible) {
+    if (!isVisible || !taskId) {
+      // Reset state when not visible or no taskId
       setProgress(0);
       setStatusText("准备同步...");
       setCurrentCount(0);
       setTotalCount(0);
       setIsCompleted(false);
       setError(null);
-      return;
-    }
-
-    if (!taskId) {
-      // Fallback for demo / legacy without taskId
-      // ... (Original fake progress logic could go here if needed, but let's assume we always have taskId for new flow)
-      setStatusText("初始化任务...");
       return;
     }
 
@@ -59,6 +53,12 @@ export function SyncProgress({ isVisible, taskId, onComplete }: SyncProgressProp
           setStatusText("同步失败");
           clearInterval(intervalId);
           toast.error(`同步失败: ${data.error}`);
+          // Auto-close error after 5 seconds
+          setTimeout(() => {
+            if (isMounted.current) {
+              onComplete();
+            }
+          }, 5000);
           return;
         }
 
@@ -124,9 +124,20 @@ export function SyncProgress({ isVisible, taskId, onComplete }: SyncProgressProp
           )}
 
           <div className="flex-1 min-w-0">
-            <h3 className={`font-medium text-sm mb-1 ${error ? 'text-destructive' : ''}`}>
-              {error ? "同步出错" : (isCompleted ? "同步成功" : "正在同步")}
-            </h3>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className={`font-medium text-sm ${error ? 'text-destructive' : ''}`}>
+                {error ? "同步出错" : (isCompleted ? "同步成功" : "正在同步")}
+              </h3>
+              {(error || isCompleted) && (
+                <button
+                  onClick={onComplete}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                  aria-label="关闭"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
 
             <p className="text-xs text-muted-foreground mb-3">
               {statusText}

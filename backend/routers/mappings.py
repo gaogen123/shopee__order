@@ -69,12 +69,12 @@ def save_mapping(mapping: MappingCreate):
         INSERT INTO cost_mappings (
             site_id, shop_id, item_id, sku_id, product_name,
             purchase_cost, domestic_shipping_cost, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(site_id, shop_id, item_id, sku_id) DO UPDATE SET
-            purchase_cost=excluded.purchase_cost,
-            domestic_shipping_cost=excluded.domestic_shipping_cost,
-            product_name=excluded.product_name,
-            created_at=excluded.created_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            purchase_cost=VALUES(purchase_cost),
+            domestic_shipping_cost=VALUES(domestic_shipping_cost),
+            product_name=VALUES(product_name),
+            created_at=VALUES(created_at)
     """, (
         mapping.site_id,
         mapping.shop_id,
@@ -87,7 +87,7 @@ def save_mapping(mapping: MappingCreate):
     ))
     
     # 获取ID
-    c.execute("SELECT id FROM cost_mappings WHERE site_id=? AND shop_id=? AND item_id=? AND sku_id=?", 
+    c.execute("SELECT id FROM cost_mappings WHERE site_id=%s AND shop_id=%s AND item_id=%s AND sku_id=%s", 
              (mapping.site_id, mapping.shop_id, mapping.item_id, mapping.sku_id or ""))
     row = c.fetchone()
     mapping_id = row[0] if row else None
@@ -110,8 +110,8 @@ def get_mappings():
     """
     # 建立数据库连接
     conn = get_db_connection()
-    conn.row_factory = sqlite3.Row  # 启用行工厂，返回字典式结果
-    c = conn.cursor()
+    # conn.row_factory = sqlite3.Row  # MySQL Connector dictionary=True handles this
+    c = conn.cursor(dictionary=True)
 
     # 查询所有映射记录，按创建时间倒序
     c.execute("SELECT * FROM cost_mappings ORDER BY created_at DESC")
@@ -142,7 +142,7 @@ def delete_mapping(mapping_id: int):
     """
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM cost_mappings WHERE id = ?", (mapping_id,))
+    c.execute("DELETE FROM cost_mappings WHERE id = %s", (mapping_id,))
     conn.commit()
     conn.close()
     return {"status": "success"}
