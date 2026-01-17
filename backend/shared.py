@@ -1,147 +1,168 @@
-import sqlite3
+import mysql.connector
 from pathlib import Path
 
-# Shared database and utility functions
+# 共享数据库和工具函数
 BASE_DIR = Path(__file__).resolve().parent
-DB_FILE = BASE_DIR.parent / "shopee_orders.db"
+# DB_FILE 不再用于连接，但保留作为参考
+# 我们现在切换到了 MySQL 服务器
 
 def get_db_connection():
-    # Ensure DB file exists or create it if not (sqlite3 connects creates it, but we need tables)
-    conn = sqlite3.connect(str(DB_FILE))
-    conn.row_factory = sqlite3.Row
+    """获取数据库连接"""
+    # 连接到本地 MySQL 数据库
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="",  # 假设 root 用户没有密码（基于之前的检查）
+        database="shopee_orders"
+    )
     return conn
 
 def init_db_tables(conn):
-    c = conn.cursor()
-    # Check if escrow_data column exists, if not add it (simple migration)
-    try:
-        c.execute("SELECT escrow_data FROM orders LIMIT 1")
-    except sqlite3.OperationalError:
+    """初始化数据库表结构"""
+    c = conn.cursor(dictionary=True)
+    
+    # 辅助函数：检查列是否存在
+    def column_exists(table, column):
+        try:
+            c.execute(f"SHOW COLUMNS FROM {table} LIKE '{column}'")
+            return c.fetchone() is not None
+        except mysql.connector.Error:
+            return False
+
+    # 检查 escrow_data 列是否存在，如果不存在则添加（简单的迁移逻辑）
+    if not column_exists('orders', 'escrow_data'):
         try:
             c.execute("ALTER TABLE orders ADD COLUMN escrow_data TEXT")
         except:
-            pass # Table might not exist yet, create below
+            pass 
 
-    # Check if estimated_shipping_fee column exists
-    try:
-        c.execute("SELECT estimated_shipping_fee FROM orders LIMIT 1")
-    except sqlite3.OperationalError:
+    # 检查 estimated_shipping_fee 列是否存在
+    if not column_exists('orders', 'estimated_shipping_fee'):
         try:
-            c.execute("ALTER TABLE orders ADD COLUMN estimated_shipping_fee REAL")
+            c.execute("ALTER TABLE orders ADD COLUMN estimated_shipping_fee DOUBLE")
         except:
             pass
 
-
-    # Check if total_cost column exists
-    try:
-        c.execute("SELECT total_cost FROM orders LIMIT 1")
-    except sqlite3.OperationalError:
+    # 检查 total_cost 列是否存在
+    if not column_exists('orders', 'total_cost'):
         try:
-            c.execute("ALTER TABLE orders ADD COLUMN total_cost REAL DEFAULT 0")
+            c.execute("ALTER TABLE orders ADD COLUMN total_cost DOUBLE DEFAULT 0")
         except:
             pass
 
+    # 检查 refund_amount 列是否存在
+    if not column_exists('orders', 'refund_amount'):
+        try:
+            c.execute("ALTER TABLE orders ADD COLUMN refund_amount DECIMAL(10, 2) DEFAULT 0.00")
+        except:
+            pass
+
+    # 创建订单主表
     c.execute('''
         CREATE TABLE IF NOT EXISTS orders (
-            order_sn TEXT PRIMARY KEY,
-            shop_id INTEGER,
-            order_status TEXT,
-            total_amount REAL,
-            estimated_shipping_fee REAL,
-            cost REAL DEFAULT 0,
-            currency TEXT,
-            create_time INTEGER,
-            pay_time INTEGER,
-            shipping_carrier TEXT,
-            payment_method TEXT,
-            buyer_username TEXT,
-            recipient_address TEXT,
-            raw_data TEXT,
-            escrow_data TEXT,
-            updated_at INTEGER
-        )
+            order_sn VARCHAR(255) PRIMARY KEY COMMENT '订单编号',
+            shop_id BIGINT COMMENT '店铺ID',
+            order_status VARCHAR(50) COMMENT '订单状态',
+            total_amount DOUBLE COMMENT '订单总金额',
+            estimated_shipping_fee DOUBLE COMMENT '预估运费',
+            cost DOUBLE DEFAULT 0 COMMENT '成本（旧字段）',
+            currency VARCHAR(10) COMMENT '货币类型',
+            create_time BIGINT COMMENT '创建时间戳',
+            pay_time BIGINT COMMENT '支付时间戳',
+            shipping_carrier VARCHAR(100) COMMENT '物流承运商',
+            payment_method VARCHAR(50) COMMENT '支付方式',
+            buyer_username VARCHAR(100) COMMENT '买家用户名',
+            recipient_address TEXT COMMENT '收件人地址（JSON）',
+            raw_data TEXT COMMENT '原始API数据（JSON）',
+            escrow_data TEXT COMMENT '托管/财务数据（JSON）',
+            updated_at BIGINT COMMENT '更新时间戳',
+            estimated_revenue DOUBLE COMMENT '预估收入',
+            exchange_rate DOUBLE COMMENT '汇率',
+            estimated_profit DOUBLE COMMENT '预估利润',
+            total_cost DOUBLE DEFAULT 0 COMMENT '总成本',
+            refund_amount DECIMAL(10, 2) DEFAULT 0.00 COMMENT '退款金额'
+        ) COMMENT='订单主表'
     ''')
+    
+    # 创建订单商品表
     c.execute('''
         CREATE TABLE IF NOT EXISTS order_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_sn TEXT,
-            item_id INTEGER,
-            order_item_id INTEGER,
-            item_name TEXT,
-            model_id INTEGER,
-            model_name TEXT,
-            model_sku TEXT,
-            model_quantity_purchased INTEGER,
-            model_discounted_price REAL,
-            image_info TEXT,
+            id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+            order_sn VARCHAR(255) COMMENT '关联订单编号',
+            item_id BIGINT COMMENT '商品ID',
+            order_item_id BIGINT COMMENT '订单项ID',
+            item_name TEXT COMMENT '商品名称',
+            model_id BIGINT COMMENT '型号ID',
+            model_name TEXT COMMENT '型号名称',
+            model_sku VARCHAR(100) COMMENT 'SKU',
+            model_quantity_purchased INT COMMENT '购买数量',
+            model_discounted_price DOUBLE COMMENT '折后价格',
+            image_info TEXT COMMENT '图片信息（JSON）',
             FOREIGN KEY(order_sn) REFERENCES orders(order_sn)
-        )
+        ) COMMENT='订单商品表'
     ''')
 
-    # Check for new columns in order_items
-    try:
-        c.execute("SELECT model_id FROM order_items LIMIT 1")
-    except sqlite3.OperationalError:
+    # 检查 order_items 表的新增列
+    if not column_exists('order_items', 'model_id'):
         try:
-            c.execute("ALTER TABLE order_items ADD COLUMN model_id INTEGER")
+            c.execute("ALTER TABLE order_items ADD COLUMN model_id BIGINT")
         except:
             pass
 
-    try:
-        c.execute("SELECT model_sku FROM order_items LIMIT 1")
-    except sqlite3.OperationalError:
+    if not column_exists('order_items', 'model_sku'):
         try:
-            c.execute("ALTER TABLE order_items ADD COLUMN model_sku TEXT")
+            c.execute("ALTER TABLE order_items ADD COLUMN model_sku VARCHAR(100)")
         except:
             pass
 
-    try:
-        c.execute("SELECT order_item_id FROM order_items LIMIT 1")
-    except sqlite3.OperationalError:
+    if not column_exists('order_items', 'order_item_id'):
         try:
-            c.execute("ALTER TABLE order_items ADD COLUMN order_item_id INTEGER")
+            c.execute("ALTER TABLE order_items ADD COLUMN order_item_id BIGINT")
         except:
             pass
 
+    # 创建成本映射表（管理端配置）
     c.execute('''
         CREATE TABLE IF NOT EXISTS cost_mappings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            site_id TEXT,
-            shop_id TEXT,
-            item_id INTEGER,
-            sku_id TEXT,
-            product_name TEXT,
-            purchase_cost REAL DEFAULT 0,
-            domestic_shipping_cost REAL DEFAULT 0,
-            created_at INTEGER,
+            id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+            site_id VARCHAR(50) COMMENT '站点ID',
+            shop_id VARCHAR(50) COMMENT '店铺ID',
+            item_id BIGINT COMMENT '商品ID',
+            sku_id VARCHAR(100) COMMENT 'SKU ID',
+            product_name TEXT COMMENT '商品名称',
+            purchase_cost DOUBLE DEFAULT 0 COMMENT '采购成本',
+            domestic_shipping_cost DOUBLE DEFAULT 0 COMMENT '国内物流成本',
+            created_at BIGINT COMMENT '创建时间',
             UNIQUE(site_id, shop_id, item_id, sku_id)
-        )
+        ) COMMENT='成本映射表（管理端配置）'
     ''')
 
-
+    # 创建订单项成本表（旧表，保留兼容性）
     c.execute('''
         CREATE TABLE IF NOT EXISTS order_item_costs (
-            order_sn TEXT,
-            item_id INTEGER,
-            model_id INTEGER DEFAULT 0,
-            sourcing_price REAL,
+            order_sn VARCHAR(255) COMMENT '订单编号',
+            item_id BIGINT COMMENT '商品ID',
+            model_id BIGINT DEFAULT 0 COMMENT '型号ID',
+            sourcing_price DOUBLE COMMENT '采购价',
             PRIMARY KEY (order_sn, item_id, model_id)
-        )
+        ) COMMENT='订单项成本表（旧表）'
     ''')
 
-    # 创建用户记录的订单项成本表（与管理表 cost_mappings 区分开）
+    # 创建用户记录的订单项成本表（实际使用的成本表）
+    # 与管理表 cost_mappings 区分开，这是具体到某个订单的快照
     c.execute('''
         CREATE TABLE IF NOT EXISTS order_item_user_costs (
-            order_sn TEXT,
-            item_id INTEGER,
-            model_id INTEGER DEFAULT 0,
-            purchase_cost REAL DEFAULT 0,
-            domestic_shipping_cost REAL DEFAULT 0,
-            updated_at INTEGER DEFAULT 0,
+            order_sn VARCHAR(255) COMMENT '订单编号',
+            item_id BIGINT COMMENT '商品ID',
+            model_id BIGINT DEFAULT 0 COMMENT '型号ID',
+            purchase_cost DOUBLE DEFAULT 0 COMMENT '采购成本',
+            domestic_shipping_cost DOUBLE DEFAULT 0 COMMENT '国内物流成本',
+            updated_at BIGINT DEFAULT 0 COMMENT '更新时间',
             PRIMARY KEY (order_sn, item_id, model_id)
-        )
+        ) COMMENT='订单项用户成本表（实际使用）'
     ''')
     conn.commit()
+    c.close()
 
 # Import token manager functions (will be available after token_manager is in path)
 def get_valid_token(shop_id):
@@ -276,15 +297,32 @@ def fetch_escrow_detail(shop_id, order_sn):
         return None
 
 def save_order_to_db(conn, shop_id, order, escrow_data=None):
-    c = conn.cursor()
+    """
+    保存订单数据到数据库
+    
+    Args:
+        conn: 数据库连接对象
+        shop_id: 店铺ID
+        order: 订单详情数据 (字典)
+        escrow_data: 托管/财务数据 (字典，可选)
+    """
+    c = conn.cursor(dictionary=True)
 
-    # Prepare escrow_data string
+    # 准备 escrow_data 字符串
     escrow_json = json.dumps(escrow_data) if escrow_data else None
 
-    # Extract estimated shipping fee (priority to escrow data)
+    # 提取预估运费 (优先使用 escrow 数据)
     est_ship = 0
-    if escrow_data and 'estimated_shipping_fee' in escrow_data:
+    refund_amount = 0.0
+    if escrow_data:
          est_ship = escrow_data.get('estimated_shipping_fee', 0)
+         # 提取退款金额 (优先使用 refund_amount_to_buyer，如果没有则检查 seller_return_refund)
+         val = escrow_data.get('refund_amount_to_buyer')
+         if val is None:
+             # seller_return_refund 通常是负数，取绝对值
+             val = abs(float(escrow_data.get('seller_return_refund', 0) or 0))
+         
+         refund_amount = float(val or 0)
     else:
          est_ship = order.get('estimated_shipping_fee', 0)
 
@@ -297,35 +335,16 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
     }
     currency = order.get('currency', 'BRL')
     exchange_rate = EXCHANGE_RATES.get(currency, 1.0)
-    
-    # 计算商品总额
-    item_total = sum(
-        float(item.get('model_discounted_price', 0)) * float(item.get('model_quantity_purchased', 0))
-        for item in order.get('item_list', [])
-    )
-    
-    # 计算预估收入
+
+    # 计算预估收入 - 直接使用 Shopee 返回的 escrow_amount
     estimated_revenue = 0
     if escrow_data:
-        # 优先使用 escrow 中的 order_income_amount
-        order_income_amount = escrow_data.get('order_income_amount')
-        if order_income_amount is not None:
-            estimated_revenue = float(order_income_amount)
-        else:
-            # 备用计算公式: (商品总额 + 预估运费净额) - 总费用
-            actual_shipping = float(escrow_data.get('actual_shipping_fee', 0))
-            estimated_shipping = float(escrow_data.get('estimated_shipping_fee', 0))
-            commission = float(escrow_data.get('commission_fee', 0))
-            service = float(escrow_data.get('service_fee', 0))
-            transaction = float(escrow_data.get('seller_transaction_fee', 0))
-            total_fees = commission + service + transaction
-            
-            # 预估运费净额 = 预估运费 - 实际运费
-            shipping_net = estimated_shipping - actual_shipping
-            estimated_revenue = (item_total + shipping_net) - total_fees
+        escrow_amount = escrow_data.get('escrow_amount')
+        if escrow_amount is not None:
+            estimated_revenue = float(escrow_amount)
     
     # 获取现有成本来计算利润（如果存在）
-    c.execute("SELECT total_cost FROM orders WHERE order_sn = ?", (order.get('order_sn'),))
+    c.execute("SELECT total_cost FROM orders WHERE order_sn = %s", (order.get('order_sn'),))
     existing = c.fetchone()
     total_cost = existing['total_cost'] if existing and existing['total_cost'] else 0
     
@@ -333,26 +352,27 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
     revenue_in_rmb = estimated_revenue * exchange_rate
     estimated_profit = revenue_in_rmb - total_cost
 
-    # Upsert with estimated_revenue, exchange_rate, estimated_profit columns
+    # 插入或更新订单数据 (Upsert)
     c.execute('''
         INSERT INTO orders (
             order_sn, shop_id, order_status, total_amount, estimated_shipping_fee, currency,
             create_time, pay_time, shipping_carrier, payment_method,
             buyer_username, recipient_address, raw_data, escrow_data, updated_at,
-            estimated_revenue, exchange_rate, estimated_profit
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(order_sn) DO UPDATE SET
-            order_status=excluded.order_status,
-            total_amount=excluded.total_amount,
-            estimated_shipping_fee=excluded.estimated_shipping_fee,
-            create_time=excluded.create_time,
-            pay_time=excluded.pay_time,
-            raw_data=excluded.raw_data,
-            escrow_data=COALESCE(excluded.escrow_data, orders.escrow_data),
-            updated_at=excluded.updated_at,
-            estimated_revenue=excluded.estimated_revenue,
-            exchange_rate=excluded.exchange_rate,
-            estimated_profit=excluded.estimated_profit
+            estimated_revenue, exchange_rate, estimated_profit, refund_amount
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            order_status=VALUES(order_status),
+            total_amount=VALUES(total_amount),
+            estimated_shipping_fee=VALUES(estimated_shipping_fee),
+            create_time=VALUES(create_time),
+            pay_time=VALUES(pay_time),
+            raw_data=VALUES(raw_data),
+            escrow_data=COALESCE(VALUES(escrow_data), orders.escrow_data),
+            updated_at=VALUES(updated_at),
+            estimated_revenue=VALUES(estimated_revenue),
+            exchange_rate=VALUES(exchange_rate),
+            estimated_profit=VALUES(estimated_profit),
+            refund_amount=VALUES(refund_amount)
     ''', (
         order.get('order_sn'),
         shop_id,
@@ -371,11 +391,12 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
         int(time.time()),
         estimated_revenue,
         exchange_rate,
-        estimated_profit
+        estimated_profit,
+        refund_amount
     ))
 
-    # Save Items - 删除并重新插入订单项（不再包含成本字段）
-    c.execute('DELETE FROM order_items WHERE order_sn = ?', (order.get('order_sn'),))
+    # 保存订单项 - 删除并重新插入（不再包含成本字段）
+    c.execute('DELETE FROM order_items WHERE order_sn = %s', (order.get('order_sn'),))
     for item in order.get('item_list', []):
         item_id = item.get('item_id')
         model_id = item.get('model_id', 0)
@@ -384,7 +405,7 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
             INSERT INTO order_items (
                 order_sn, item_id, order_item_id, item_name, model_id, model_name, model_sku,
                 model_quantity_purchased, model_discounted_price, image_info
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''', (
             order.get('order_sn'),
             item_id,
@@ -407,8 +428,8 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
         c.execute('''
             INSERT INTO order_item_user_costs (
                 order_sn, item_id, model_id, purchase_cost, domestic_shipping_cost, updated_at
-            ) VALUES (?, ?, ?, 0, 0, ?)
-            ON CONFLICT(order_sn, item_id, model_id) DO NOTHING
+            ) VALUES (%s, %s, %s, 0, 0, %s)
+            ON DUPLICATE KEY UPDATE order_sn=order_sn
         ''', (
             order.get('order_sn'),
             item_id,
@@ -416,3 +437,4 @@ def save_order_to_db(conn, shop_id, order, escrow_data=None):
             int(time.time())
         ))
     conn.commit()
+    c.close()

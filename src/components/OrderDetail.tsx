@@ -179,10 +179,39 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
         };
         const defaultRate = fallbackRates[currency] || 1;
 
-        // Pre-calculate Item Total (Discounted) to ensure consistency
-        const calculatedItemTotal = data.item_list?.reduce((acc: number, item: any) => acc + (item.model_discounted_price * item.model_quantity_purchased), 0) || 0;
+        // 预先计算商品总额（折后），确保一致性
+        const calculatedItemTotal = data.item_list?.reduce((acc: number, item: any) => {
+          const price = parseFloat(item.model_discounted_price) || 0;
+          const qty = parseFloat(item.model_quantity_purchased) || 0;
+          return acc + (price * qty);
+        }, 0) || 0;
 
-        // Map Shopee API structure to Component structure
+        // Ensure refund amount is a valid number
+        let refundVal = parseFloat(data.refund_amount);
+        if (isNaN(refundVal) || refundVal === 0) {
+          // If the database value is 0 or invalid, try other fields
+          const fromEscrow = parseFloat(data.escrow_info?.order_income?.refund_amount_to_buyer);
+          const fromFinancials = parseFloat(data.financials?.order_income?.refund_amount_to_buyer);
+          const fromSellerReturn = parseFloat(data.escrow_info?.seller_return_refund);
+
+          if (!isNaN(fromEscrow) && fromEscrow !== 0) refundVal = fromEscrow;
+          else if (!isNaN(fromFinancials) && fromFinancials !== 0) refundVal = fromFinancials;
+          else if (!isNaN(fromSellerReturn) && fromSellerReturn !== 0) refundVal = Math.abs(fromSellerReturn);
+          else refundVal = 0;
+        }
+
+        const refundAmount = refundVal;
+
+        // 计算预估运费总额
+        // 正常情况: 预估运费 - 实际运费
+        // 退款情况: 直接使用物流业者收取的预估运费（实际运费）
+        const actualShippingFee = data.escrow_info?.actual_shipping_fee || data.actual_shipping_fee || 0;
+        const estimatedShippingFee = data.financials?.estimated_shipping_fee || 0;
+        const estimatedShippingTotal = refundAmount > 0
+          ? -actualShippingFee  // 退款时：预估运费总额 = 物流业者收取的预估运费（负数，表示支出）
+          : estimatedShippingFee - actualShippingFee;  // 正常情况：预估运费净额
+
+        // 将 Shopee API 结构映射到组件结构
         setOrder({
           orderNo: data.order_sn,
           currency: currency,
@@ -210,11 +239,11 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
             image: item.image_info?.image_url || '',
           })),
           payment: {
-            itemTotal: calculatedItemTotal,
-            itemPrice: calculatedItemTotal, // Use calculated reduced price to match "Item Total"
-            estimatedShipping: (data.financials?.estimated_shipping_fee || 0) - (data.escrow_info?.actual_shipping_fee || data.actual_shipping_fee || 0),
+            itemTotal: calculatedItemTotal - refundAmount, // 商品总额 = 商品价格 - 退款金额
+            itemPrice: calculatedItemTotal, // 使用计算后的折后价格（商品价格）以匹配"商品总额"
+            estimatedShipping: estimatedShippingTotal,  // 退款时使用物流业者收取的预估运费
             buyerPaidShipping: (data.financials?.estimated_shipping_fee || 0) - (data.financials?.shopee_shipping_rebate || 0),
-            // Logistics Fee = Prioritize escrow actual fee
+            // 物流费 = 优先使用托管实际费用
             logisticsProviderFee: data.escrow_info?.actual_shipping_fee || data.actual_shipping_fee || 0,
             shopeeShippingRebate: data.financials?.shopee_shipping_rebate || 0,
             totalFees: data.financials?.total_fees || 0,
@@ -222,9 +251,10 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
             serviceFee: data.financials?.service_fee || 0,
             transactionFee: data.financials?.seller_transaction_fee || 0,
             estimatedRevenue: data.estimated_revenue || 0,
+            refundAmount: refundAmount, // 添加退款金额
           },
           buyerPayment: {
-            itemTotal: calculatedItemTotal, // Use calculated item total
+            itemTotal: calculatedItemTotal, // 使用计算后的商品总额
             shipping: data.escrow_info?.seller_shipping_discount || 0,
             shopeeVoucher: data.escrow_info?.discount_from_voucher_shopee || 0,
             sellerVoucher: data.escrow_info?.seller_discount || 0,
@@ -619,16 +649,31 @@ export function OrderDetail({ orderSn, shopId, shopRegion, shopName, onBack }: O
                   {showRevenueDetails && (
                     <table className="w-fit ml-auto text-sm border-separate border-spacing-y-2">
                       <tbody>
-                        {/* 商品总额 */}
-                        <tr>
-                          <td className="text-right pr-6 text-gray-600 align-middle">商品总额</td>
-                          <td className="text-right text-gray-900 font-medium whitespace-nowrap align-middle">R${order.payment.itemTotal.toFixed(2)}</td>
-                        </tr>
-
                         {/* 商品价格 */}
                         <tr>
                           <td className="text-right pr-6 text-gray-400 text-xs text-gray-300 align-middle">商品价格</td>
                           <td className="text-right text-gray-400 text-xs text-gray-300 whitespace-nowrap align-middle">R${order.payment.itemPrice.toFixed(2)}</td>
+                        </tr>
+
+                        {/* 退款金额 (仅在有退款时显示) */}
+                        {order.payment.refundAmount > 0 && (
+                          <tr>
+                            <td className="text-right pr-6 text-gray-600 align-middle">
+                              <div className="flex items-center justify-end gap-1">
+                                <span>退款金额</span>
+                                <HelpCircle className="w-3 h-3 text-gray-400" />
+                              </div>
+                            </td>
+                            <td className="text-right text-red-600 font-medium whitespace-nowrap align-middle">
+                              -R${order.payment.refundAmount.toFixed(2)}
+                            </td>
+                          </tr>
+                        )}
+
+                        {/* 商品总额 */}
+                        <tr>
+                          <td className="text-right pr-6 text-gray-600 align-middle">商品总额</td>
+                          <td className="text-right text-gray-900 font-medium whitespace-nowrap align-middle">R${order.payment.itemTotal.toFixed(2)}</td>
                         </tr>
 
                         {/* 预估运费总额 */}
