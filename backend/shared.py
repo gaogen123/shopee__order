@@ -8,12 +8,18 @@ BASE_DIR = Path(__file__).resolve().parent
 
 def get_db_connection():
     """获取数据库连接"""
-    # 连接到本地 MySQL 数据库
+    # 连接到 MySQL 数据库 (支持环境变量配置，用于 Docker 部署)
+    import os
+    db_host = os.getenv("DB_HOST", "localhost")
+    db_user = os.getenv("DB_USER", "root")
+    db_password = os.getenv("DB_PASSWORD", "")
+    db_name = os.getenv("DB_NAME", "shopee_orders")
+
     conn = mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="",  # 假设 root 用户没有密码（基于之前的检查）
-        database="shopee_orders"
+        host=db_host,
+        user=db_user,
+        password=db_password,
+        database=db_name
     )
     return conn
 

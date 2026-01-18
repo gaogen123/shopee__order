@@ -47,7 +47,6 @@
             "vaul": "^1.1.2"
       },
       "devDependencies": {
-            "@rollup/rollup-win32-x64-msvc": "^4.55.1",
             "@types/node": "^20.10.0",
             "@vitejs/plugin-react": "^4.3.3",
             "autoprefixer": "^10.4.23",
@@ -58,8 +57,5 @@
       "scripts": {
             "dev": "vite",
             "build": "vite build"
-      },
-      "optionalDependencies": {
-            "@rollup/rollup-win32-x64-msvc": "^4.55.1"
       }
 }
