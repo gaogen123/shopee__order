@@ -1,9 +1,9 @@
-import { LayoutGrid, Package, BarChart2 } from "lucide-react";
+import { LayoutGrid, Package, BarChart2, Bot } from "lucide-react";
 import { cn } from "./ui/utils";
 
 interface SidebarProps {
-    activeTab: 'dashboard' | 'orders' | 'mappings';
-    onTabChange: (tab: 'dashboard' | 'orders' | 'mappings') => void;
+    activeTab: 'dashboard' | 'orders' | 'mappings' | 'pdd';
+    onTabChange: (tab: 'dashboard' | 'orders' | 'mappings' | 'pdd') => void;
 }
 
 export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
@@ -55,7 +55,21 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
                     style={activeTab === 'mappings' ? { backgroundColor: '#2563eb', color: 'white' } : {}}
                 >
                     <Package className={cn("w-5 h-5", activeTab === 'mappings' ? "text-white" : "text-gray-400")} />
-                    成本映射管理
+                    移动映射管理
+                </button>
+
+                <button
+                    onClick={() => onTabChange('pdd')}
+                    className={cn(
+                        "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium text-sm",
+                        activeTab === 'pdd'
+                            ? "bg-blue-600 text-white shadow-lg shadow-blue-900/20"
+                            : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    )}
+                    style={activeTab === 'pdd' ? { backgroundColor: '#db2777', color: 'white' } : {}}
+                >
+                    <Bot className={cn("w-5 h-5", activeTab === 'pdd' ? "text-white" : "text-gray-400")} />
+                    Shopee智能助手
                 </button>
             </nav>
         </div>

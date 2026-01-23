@@ -11,12 +11,14 @@ def get_db_connection():
     # 连接到 MySQL 数据库 (支持环境变量配置，用于 Docker 部署)
     import os
     db_host = os.getenv("DB_HOST", "localhost")
+    db_port = int(os.getenv("DB_PORT", 3306))
     db_user = os.getenv("DB_USER", "root")
     db_password = os.getenv("DB_PASSWORD", "")
     db_name = os.getenv("DB_NAME", "shopee_orders")
 
     conn = mysql.connector.connect(
         host=db_host,
+        port=db_port,
         user=db_user,
         password=db_password,
         database=db_name

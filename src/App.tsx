@@ -14,6 +14,7 @@ import { Checkbox } from "./components/ui/checkbox";
 import { toast } from "sonner@2.0.3";
 import { Toaster } from "./components/ui/sonner";
 import { Dashboard } from "./components/Dashboard";
+import { ShopeeAssistant } from "./components/ShopeeAssistant";
 
 // Mock data for orders
 const mockOrders: Order[] = [
@@ -470,13 +471,14 @@ const mockOrders: Order[] = [
 ];
 
 import { Sidebar } from "./components/Sidebar";
+import { PddAgent } from "./components/PddAgent";
 
 
 
 // ... (existing helper function nearby, handled via imports)
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<'dashboard' | 'orders' | 'mappings'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'orders' | 'mappings' | 'pdd'>('dashboard');
   const [searchQuery, setSearchQuery] = useState("");
 
   // Default date range: Last 30 days
@@ -1440,7 +1442,7 @@ export default function App() {
           <div className="flex-1 overflow-y-auto">
             <Dashboard key={dashboardKey} onViewOrder={handleDashboardViewOrder} />
           </div>
-        ) : (
+        ) : currentView === 'mappings' ? (
           /* Mappings View */
           <div className="flex-1 flex flex-col p-4 sm:p-6 lg:p-8 h-full overflow-hidden bg-gray-50">
             <ProductCostMappingManager
@@ -1453,6 +1455,11 @@ export default function App() {
               orders={orders}
               mode="embedded"
             />
+          </div>
+        ) : (
+          /* PDD Agent View */
+          <div className="flex-1 overflow-hidden h-full">
+            <ShopeeAssistant />
           </div>
         )}
       </main>
