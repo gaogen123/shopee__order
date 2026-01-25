@@ -13,11 +13,15 @@ os.environ["DEEPSEEK_API_KEY"] = "sk-edebb99b4b1045f19f3dd9c2621b8776"
 BASE_URL = "https://api.deepseek.com"
 
 from pdd_agent_tools import crawl_pinduoduo
+import contextvars
+
+# 定义上下文变量，用于在工具中获取当前的 thread_id
+current_thread_id = contextvars.ContextVar("thread_id", default=None)
 
 # --- 1. 定义工具 (Tools) ---
 
 @tool
-def search_pdd_tool(keyword: str, quantity: int = 2, need_download: bool = False) -> str:
+def search_pdd_tool(keyword: str, quantity: int = 2, need_download: bool = False, session_id: str = None) -> str:
     """
     搜索拼多多(PDD)上的商品，并返回商品详情，包括价格和评论。
     
@@ -25,9 +29,10 @@ def search_pdd_tool(keyword: str, quantity: int = 2, need_download: bool = False
         keyword: 商品的搜索关键词。
         quantity: 需要采集的商品数量 (默认为 2)。
         need_download: 是否需要下载商品详情和图片 (默认为 False)。
+        session_id: 会话 ID，用于控制中断（由系统自动注入，无需 LLM 生成）。
     """
     try:
-        return crawl_pinduoduo(keyword, limit=quantity, enable_download=need_download)
+        return crawl_pinduoduo(keyword, limit=quantity, enable_download=need_download, session_id=session_id)
     except Exception as e:
         return f"Error crawling Pinduoduo: {str(e)}"
 
@@ -112,15 +117,38 @@ def intent_router(state: AgentState) -> Literal["crawler_tool_node", "response_n
 # 这个节点负责调用工具。我们让它绑定工具并思考如何调用。
 crawler_llm = llm.bind_tools(all_tools)
 
-def crawler_tool_node(state: AgentState):
+from langchain_core.runnables import RunnableConfig
+
+def crawler_tool_node(state: AgentState, config: RunnableConfig):
     messages = state["messages"]
     instruction = state["task_instruction"]
     keywords = state["keywords"]
+    
+    # 从 config 中获取 thread_id (即 session_id)
+    thread_id = config.get("configurable", {}).get("thread_id")
+    
+    # 清理旧的停止文件，防止误判
+    if thread_id:
+        stop_file = f"/tmp/agent_stops/{thread_id}"
+        if os.path.exists(stop_file):
+            try:
+                os.remove(stop_file)
+                print(f"🧹 [Agent] 已清理旧的停止文件: {stop_file}")
+            except Exception as e:
+                print(f"⚠️ [Agent] 清理停止文件失败: {e}")
     
     system_prompt = SystemMessage(content=f"你是爬虫专家。用户想找：{keywords}。请根据以下详细要求调用工具获取数据：{instruction}")
     
     # 将 state 中的消息和指令结合
     response = crawler_llm.invoke([system_prompt] + messages)
+    
+    # 强制注入 session_id 到工具调用中
+    if hasattr(response, 'tool_calls') and response.tool_calls:
+        for tool_call in response.tool_calls:
+            if tool_call['name'] == 'search_pdd_tool':
+                tool_call['args']['session_id'] = thread_id
+                print(f"🔧 [Agent] 已注入 session_id: {thread_id} 到工具调用")
+                
     return {"messages": [response]}
 
 # 4.4 爬虫路由 (判断是否需要执行工具)
@@ -218,8 +246,14 @@ graph = builder.compile(checkpointer=memory)
 # --- 6. 辅助函数 ---
 
 def run_agent_generator(query: str, thread_id: str = None):
+    # 如果没有提供 thread_id，则生成一个新的
     if not thread_id:
         thread_id = f"shopee-{os.urandom(4).hex()}"
+    
+    print(f"🔄 [Agent] 使用会话 ID: {thread_id}")
+    
+    # 设置上下文变量
+    token = current_thread_id.set(thread_id)
     
     # 每次运行传入用户消息
     initial_state = {"messages": [("user", query)]}
@@ -240,26 +274,29 @@ def run_agent_generator(query: str, thread_id: str = None):
                     
                     display_msg = ""
                     if node_name == "intent_node":
-                        display_msg = "🔍 **[意图分析]**：正在深度分析您的需求与关键词..."
+                        display_msg = "\n\n🔍 **[意图分析]**：正在深度分析您的需求与关键词..."
                     elif node_name == "crawler_tool_node":
                         if hasattr(msg, 'tool_calls') and msg.tool_calls:
                             raw_tool_name = msg.tool_calls[0].get('name')
                             friendly_name = tool_name_map.get(raw_tool_name, raw_tool_name)
-                            display_msg = f"🕸️ **[采集启动]**：已为你匹配到最好的采集方案，正在唤起【{friendly_name}】..."
+                            display_msg = f"\n\n🕸️ **[采集启动]**：已为你匹配到最好的采集方案，正在唤起【{friendly_name}】..."
                         else:
-                            display_msg = "🔎 **[任务规划]**：正在为您梳理采集路径与策略..."
+                            display_msg = "\n\n🔎 **[任务规划]**：正在为您梳理采集路径与策略..."
                     elif node_name == "tools":
-                        display_msg = "⚙️ **[正在执行]**：正在为您精准抓取商品数据，这可能需要一点时间..."
+                        display_msg = "\n\n⚙️ **[正在执行]**：正在为您精准抓取商品数据，这可能需要一点时间..."
                     elif node_name == "response_node":
                         display_msg = content
                     
                     if display_msg:
-                        if node_name != "response_node":
-                            # 为过程信息增加双换行，确保在 Markdown 渲染中分段清晰
-                            yield f"data: {display_msg}\n\n"
-                        else:
-                            # 最终回复直接输出
-                            yield f"data: {display_msg}\n\n"
+                        # 处理多行文本，确保符合 SSE 格式
+                        # SSE 要求每一行数据都以 "data: " 开头
+                        formatted_lines = []
+                        for line in display_msg.split('\n'):
+                            formatted_lines.append(f"data: {line}")
+                        
+                        # 合并成一个完整的 SSE 消息块，以双换行结束
+                        sse_message = "\n".join(formatted_lines) + "\n\n"
+                        yield sse_message
 
     except Exception as e:
         yield f"data: Error: {str(e)}\n\n"

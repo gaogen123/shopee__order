@@ -156,7 +156,7 @@ def init_db_tables(conn):
         ) COMMENT='订单项成本表（旧表）'
     ''')
 
-    # 创建用户记录的订单项成本表（实际使用的成本表）
+    # 创建订单项用户成本表（实际使用）
     # 与管理表 cost_mappings 区分开，这是具体到某个订单的快照
     c.execute('''
         CREATE TABLE IF NOT EXISTS order_item_user_costs (
@@ -168,6 +168,18 @@ def init_db_tables(conn):
             updated_at BIGINT DEFAULT 0 COMMENT '更新时间',
             PRIMARY KEY (order_sn, item_id, model_id)
         ) COMMENT='订单项用户成本表（实际使用）'
+    ''')
+
+    # 创建 Shopee 全球商品类目表
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS shopee_global_categories (
+            category_id BIGINT PRIMARY KEY COMMENT '类目ID',
+            parent_category_id BIGINT COMMENT '父类目ID',
+            original_category_name VARCHAR(255) COMMENT '原始类目名称(英文)',
+            display_category_name VARCHAR(255) COMMENT '展示类目名称(本地语言)',
+            has_children BOOLEAN COMMENT '是否有子类目',
+            updated_at BIGINT COMMENT '更新时间'
+        ) COMMENT='Shopee全球商品类目表'
     ''')
     conn.commit()
     c.close()

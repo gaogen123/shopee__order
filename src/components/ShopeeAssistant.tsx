@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Bot, User, Sparkles, ShoppingBag, Plus, MessageSquare, Trash2, Menu } from "lucide-react";
+import { Send, Bot, User, Sparkles, ShoppingBag, Plus, MessageSquare, Trash2, Menu, Chrome, CheckCircle, AlertCircle, Loader2, StopCircle } from "lucide-react";
 import { cn } from "./ui/utils";
 
 interface Message {
@@ -43,8 +43,13 @@ export function ShopeeAssistant() {
     const [query, setQuery] = useState("");
     const [showSidebar, setShowSidebar] = useState(true);
 
+    // 浏览器状态相关
+    const [browserStatus, setBrowserStatus] = useState<'checking' | 'running' | 'stopped'>('checking');
+    const [isStartingBrowser, setIsStartingBrowser] = useState(false);
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const eventSourceRef = useRef<EventSource | null>(null);
 
     // Initialize sessions from localStorage
     useEffect(() => {
@@ -83,6 +88,41 @@ export function ShopeeAssistant() {
     useEffect(() => {
         inputRef.current?.focus();
     }, [currentSessionId]);
+
+    // 检查浏览器状态
+    const checkBrowserStatus = async () => {
+        try {
+            const res = await fetch('http://localhost:9000/api/agent/browser/status');
+            const data = await res.json();
+            setBrowserStatus(data.running ? 'running' : 'stopped');
+        } catch (e) {
+            setBrowserStatus('stopped');
+        }
+    };
+
+    // 定期检查浏览器状态
+    useEffect(() => {
+        checkBrowserStatus();
+        const interval = setInterval(checkBrowserStatus, 10000); // 每10秒检查一次
+        return () => clearInterval(interval);
+    }, []);
+
+    // 启动调试浏览器
+    const startDebugBrowser = async () => {
+        setIsStartingBrowser(true);
+        try {
+            const res = await fetch('http://localhost:9000/api/agent/browser/start', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                // 等待浏览器启动后再检查状态
+                setTimeout(checkBrowserStatus, 2000);
+            }
+        } catch (e) {
+            console.error('启动浏览器失败', e);
+        } finally {
+            setIsStartingBrowser(false);
+        }
+    };
 
     const createNewSession = () => {
         const newSessionId = Date.now().toString();
@@ -132,6 +172,42 @@ export function ShopeeAssistant() {
         }));
     };
 
+    const stopGeneration = async () => {
+        if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+        }
+
+        // 调用后端停止 API
+        if (currentSessionId) {
+            try {
+                await fetch(`http://localhost:9000/api/agent/stop?session_id=${currentSessionId}`, { method: 'POST' });
+            } catch (e) {
+                console.error("Failed to stop agent:", e);
+            }
+        }
+
+        setIsTyping(false);
+
+        // 更新最后一条消息状态为非流式，并添加中断提示
+        setSessions(prev => prev.map(s => {
+            if (s.id === currentSessionId) {
+                const lastMsg = s.messages[s.messages.length - 1];
+                if (lastMsg && lastMsg.role === 'assistant' && lastMsg.isStreaming) {
+                    return {
+                        ...s,
+                        messages: s.messages.map(msg =>
+                            msg.id === lastMsg.id
+                                ? { ...msg, isStreaming: false, content: msg.content + "\n\n🛑 **[已中断执行]**" }
+                                : msg
+                        )
+                    };
+                }
+            }
+            return s;
+        }));
+    };
+
     const handleSend = async () => {
         if (!query.trim() || isTyping || !currentSessionId) return;
 
@@ -159,12 +235,14 @@ export function ShopeeAssistant() {
 
             // Connect to SSE stream
             const eventSource = new EventSource(`http://localhost:9000/api/agent/stream?query=${encodeURIComponent(userMsg.content)}&session_id=${currentSessionId}`);
+            eventSourceRef.current = eventSource;
 
             let fullContent = "";
 
             eventSource.onmessage = (event) => {
                 if (event.data === "[DONE]") {
                     eventSource.close();
+                    eventSourceRef.current = null;
                     setIsTyping(false);
                     setSessions(prev => prev.map(s => {
                         if (s.id === currentSessionId) {
@@ -199,6 +277,7 @@ export function ShopeeAssistant() {
             eventSource.onerror = (err) => {
                 console.error("EventSource failed:", err);
                 eventSource.close();
+                eventSourceRef.current = null;
                 setIsTyping(false);
                 setSessions(prev => prev.map(s => {
                     if (s.id === currentSessionId) {
@@ -284,6 +363,54 @@ export function ShopeeAssistant() {
 
             {/* Main Chat Area */}
             <div className="flex-1 flex flex-col h-full relative w-full">
+                {/* 浏览器状态提示条 */}
+                {browserStatus !== 'running' && (
+                    <div className={cn(
+                        "flex items-center justify-between px-4 py-2.5 border-b",
+                        browserStatus === 'checking'
+                            ? "bg-gray-50 border-gray-200"
+                            : "bg-amber-50 border-amber-200"
+                    )}>
+                        <div className="flex items-center gap-2">
+                            {browserStatus === 'checking' ? (
+                                <>
+                                    <Loader2 className="w-4 h-4 text-gray-500 animate-spin" />
+                                    <span className="text-sm text-gray-600">检查采集浏览器状态...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <AlertCircle className="w-4 h-4 text-amber-600" />
+                                    <span className="text-sm text-amber-800">
+                                        <strong>采集浏览器未启动</strong> - 请先启动调试浏览器，并保持打开状态
+                                    </span>
+                                </>
+                            )}
+                        </div>
+                        {browserStatus === 'stopped' && (
+                            <button
+                                onClick={startDebugBrowser}
+                                disabled={isStartingBrowser}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 text-white text-sm font-medium rounded-lg transition-all shadow-sm"
+                            >
+                                {isStartingBrowser ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <Chrome className="w-4 h-4" />
+                                )}
+                                {isStartingBrowser ? '启动中...' : '启动采集浏览器'}
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                {/* 浏览器运行中状态（可折叠的提示） */}
+                {browserStatus === 'running' && (
+                    <div className="flex items-center justify-center gap-2 px-4 py-1.5 bg-emerald-50 border-b border-emerald-200">
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="text-xs text-emerald-700">采集浏览器已就绪 · 请保持浏览器窗口打开</span>
+                    </div>
+                )}
+
                 {/* Mobile Header */}
                 <div className="md:hidden flex items-center p-4 border-b border-gray-100 bg-white">
                     <button onClick={() => setShowSidebar(true)} className="p-2 -ml-2 hover:bg-gray-50 rounded-lg">
@@ -403,11 +530,20 @@ export function ShopeeAssistant() {
                             className="w-full pl-5 pr-14 py-4 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm text-base disabled:bg-gray-50 disabled:text-gray-400"
                         />
                         <button
-                            onClick={handleSend}
-                            disabled={!query.trim() || isTyping}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded-lg transition-all shadow-sm"
+                            onClick={isTyping ? stopGeneration : handleSend}
+                            disabled={!isTyping && !query.trim()}
+                            className={cn(
+                                "absolute right-2 top-1/2 -translate-y-1/2 p-2.5 text-white rounded-lg transition-all shadow-sm",
+                                isTyping
+                                    ? "bg-red-500 hover:bg-red-600"
+                                    : "bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300"
+                            )}
                         >
-                            <Send className="w-5 h-5" />
+                            {isTyping ? (
+                                <StopCircle className="w-5 h-5" />
+                            ) : (
+                                <Send className="w-5 h-5" />
+                            )}
                         </button>
                     </div>
                 </div>

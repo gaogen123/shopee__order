@@ -137,23 +137,31 @@ def refresh_access_token(id_val, current_refresh_token, is_main_account=False):
         print(f"Network error refreshing token: {e}")
         return None
 
-def get_valid_token(shop_id=None):
+def get_valid_token(id_val=None, is_merchant=None):
     """
     Get a valid token.
-    Priority:
-    1. Check specific Shop ID token.
-    2. Check Main Account ID token (if configured).
+    id_val: shop_id or merchant_id
+    is_merchant: True if id_val is a merchant_id, False if shop_id, None to auto-detect
     """
-    # 1. Try specific shop token
-    token_data = load_tokens(shop_id)
-    target_id = shop_id
-    is_main = False
+    if id_val is None:
+        id_val = MAIN_ACCOUNT_ID
+        is_merchant = True
+
+    # Auto-detect if not specified
+    if is_merchant is None:
+        if id_val == MAIN_ACCOUNT_ID or id_val == 1291063: # 常见的 Merchant ID
+            is_merchant = True
+        else:
+            is_merchant = False
+
+    token_data = load_tokens(id_val)
+    target_id = id_val
     
-    # 2. Fallback to Main Account
-    if not token_data and MAIN_ACCOUNT_ID:
+    # Fallback to Main Account if shop token not found
+    if not token_data and not is_merchant and MAIN_ACCOUNT_ID:
         token_data = load_tokens(MAIN_ACCOUNT_ID)
         target_id = MAIN_ACCOUNT_ID
-        is_main = True
+        is_merchant = True
         # if token_data:
         #    print(f"Using Shared Main Account Token (ID: {MAIN_ACCOUNT_ID}) for Shop {shop_id}")
     
@@ -167,7 +175,7 @@ def get_valid_token(shop_id=None):
     # Check expiry (refresh if older than 3.5h)
     if current_time - updated_at > 12600: 
         print(f"Token for ID {target_id} is expiring. Refreshing...")
-        new_tokens = refresh_access_token(target_id, token_data["refresh_token"], is_main_account=is_main)
+        new_tokens = refresh_access_token(target_id, token_data["refresh_token"], is_main_account=is_merchant)
         
         if new_tokens:
             save_tokens(
