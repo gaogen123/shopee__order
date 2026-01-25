@@ -12,7 +12,8 @@ from pdd_agent_tools import crawl_pinduoduo
 os.environ["DEEPSEEK_API_KEY"] = "sk-edebb99b4b1045f19f3dd9c2621b8776"
 BASE_URL = "https://api.deepseek.com"
 
-from pdd_agent_tools import crawl_pinduoduo
+from pdd_agent_tools import crawl_pinduoduo, crawl_pinduoduo_data
+from shopee_agent_tools import publish_to_shopee_global
 import contextvars
 
 # 定义上下文变量，用于在工具中获取当前的 thread_id
@@ -36,8 +37,35 @@ def search_pdd_tool(keyword: str, quantity: int = 2, need_download: bool = False
     except Exception as e:
         return f"Error crawling Pinduoduo: {str(e)}"
 
+@tool
+def crawl_and_publish_tool(keyword: str, quantity: int = 1, session_id: str = None) -> str:
+    """
+    采集拼多多商品并直接发布到 Shopee 全球商品。
+    适用于用户明确要求“发布”、“上架”或“采集并发布”的场景。
+    
+    Args:
+        keyword: 商品的搜索关键词。
+        quantity: 需要采集并发布的商品数量 (默认为 1)。
+        session_id: 会话 ID (由系统自动注入)。
+    """
+    results = []
+    try:
+        # 使用流式采集+发布
+        for item in crawl_pinduoduo_data(keyword, limit=quantity, enable_download=True, session_id=session_id):
+            global_id = publish_to_shopee_global(item)
+            if global_id:
+                results.append(f"✅ 成功发布: {item.get('title', '未知')} (Global ID: {global_id})")
+            else:
+                results.append(f"❌ 发布失败: {item.get('title', '未知')}")
+        
+        if not results:
+            return "未找到相关商品或采集失败。"
+        return "\n".join(results)
+    except Exception as e:
+        return f"Error in crawl_and_publish: {str(e)}"
+
 # 工具列表
-all_tools = [search_pdd_tool]
+all_tools = [search_pdd_tool, crawl_and_publish_tool]
 
 # --- 2. 定义状态 (State) ---
 
@@ -70,11 +98,12 @@ def intent_node(state: AgentState):
 你的任务是分析用户的最新请求，判断其意图。
 意图分类：
 1. crawl: 用户想要寻找商品、查询价格、采集商品信息（目前仅支持拼多多）。
-2. chat: 用户只是在打招呼、闲聊、询问不需要实时爬取的问题。
+2. publish: 用户想要采集商品并发布/上架到 Shopee。
+3. chat: 用户只是在打招呼、闲聊、询问不需要实时爬取的问题。
 
 请以 JSON 格式回复：
 {
-  "intent": "crawl" 或 "chat",
+  "intent": "crawl" 或 "publish" 或 "chat",
   "reason": "简短说明理由",
   "keywords": "提取出来的搜索关键词。注意：如果用户明确指定了搜索词（如：'搜索词为：XX'、'关键词：YY'），必须原文保留该搜索词",
   "instruction": "如果是 crawl，请汇总出具体的执行要求（如：数量、下载偏好等）；如果是 chat，请保持为空"
@@ -109,7 +138,7 @@ def intent_node(state: AgentState):
 
 # 4.2 意图路由
 def intent_router(state: AgentState) -> Literal["crawler_tool_node", "response_node"]:
-    if state["intent"] == "crawl":
+    if state["intent"] in ["crawl", "publish"]:
         return "crawler_tool_node"
     return "response_node"
 
@@ -145,7 +174,7 @@ def crawler_tool_node(state: AgentState, config: RunnableConfig):
     # 强制注入 session_id 到工具调用中
     if hasattr(response, 'tool_calls') and response.tool_calls:
         for tool_call in response.tool_calls:
-            if tool_call['name'] == 'search_pdd_tool':
+            if tool_call['name'] in ['search_pdd_tool', 'crawl_and_publish_tool']:
                 tool_call['args']['session_id'] = thread_id
                 print(f"🔧 [Agent] 已注入 session_id: {thread_id} 到工具调用")
                 
@@ -171,6 +200,7 @@ def response_node(state: AgentState):
 2. **Markdown 表格展示**：必须使用 Markdown 表格形式对比展示所有采集到的商品。表格列应包括：
    - **主图**：使用 `![商品图](图片链接)` 语法展示预览图。如果链接为空则留白。
    - **商品名称**：包含标题，并将其设为指向“链接”的超链接。
+   - **Global ID**：如果商品已发布，务必展示 Global Item ID；未发布则显示“-”。
    - **价格**：展示商品价格。
    - **核心卖点/详情**：简要概括详情中的重要参数（如材质、空间、是否有隔层等）。
 3. **对比分析**：在表格下方根据用户提出的需求（如“空间要大”、“耐用”等）做简短的推荐建议。
@@ -269,6 +299,7 @@ def run_agent_generator(query: str, thread_id: str = None):
                     # 格式化输出前缀和任务内容
                     tool_name_map = {
                         "search_pdd_tool": "拼多多商品采集器",
+                        "crawl_and_publish_tool": "拼多多采集+Shopee发布助手",
                         "search_shopee_tool": "Shopee 商品采集器"
                     }
                     

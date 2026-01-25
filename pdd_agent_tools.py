@@ -230,7 +230,7 @@ def crawl_pinduoduo(keyword: str, limit: int = 2, enable_download: bool = False,
     
     return "\n".join(results_summary)
 
-def crawl_pinduoduo_data(keyword: str, limit: int = 2, enable_download: bool = True, session_id: str = None) -> list:
+def crawl_pinduoduo_data(keyword: str, limit: int = 3, enable_download: bool = True, session_id: str = None) -> list:
     """
     Crawls Pinduoduo search results and returns structured data.
     
@@ -305,273 +305,285 @@ def crawl_pinduoduo_data(keyword: str, limit: int = 2, enable_download: bool = T
         page.close()
         return []
 
-    print(f"🎉 [Agent] 识别到 {len(product_cards)} 个可能的商品，准备采集前 {limit} 个...")
-    
-    count = 0
-    for i in range(len(product_cards)):
-        if stop_file and os.path.exists(stop_file):
-            print(f"🛑 [Agent] 检测到停止信号，中断采集！")
-            break
-            
-        if count >= limit:
-            break
-            
-        print(f"\n🚀 [Agent] 处理第 {count+1}/{limit} 个商品...")
+    try:
+        print(f"🎉 [Agent] 识别到 {len(product_cards)} 个可能的商品，准备采集前 {limit} 个...")
         
-        try:
-            current_cards = page.eles('._3glhOBhU')
-            if not current_cards or i >= len(current_cards):
-                print(f"    ⚠️ 无法获取第 {i+1} 个卡片")
-                continue
-            
-            card = current_cards[i]
-            search_page_url = page.url
-            
-            card.click()
-            time.sleep(3)
-            
-            if page.url == search_page_url:
-                print("    ⚠️ 点击未跳转")
-                continue
+        count = 0
+        for i in range(len(product_cards)):
+            if stop_file and os.path.exists(stop_file):
+                print(f"🛑 [Agent] 检测到停止信号，中断采集！")
+                break
                 
-            print(f"    📄 进入详情页: {page.title[:20]}...")
+            if count >= limit:
+                break
+                
+            print(f"\n🚀 [Agent] 处理第 {count+1}/{limit} 个商品...")
             
-            item_data = {}
-            item_data['url'] = page.url
-            
-            # 1. 标题
-            title_ele = page.ele('.Vrv3bF_E', timeout=5)
-            if not title_ele: title_ele = page.ele('._2_v_q_q_')
-            if not title_ele: title_ele = page.ele('tag:h1')
-            
-            title = title_ele.text if title_ele else page.title
-            if not title or title == "拼多多": 
-                title = "时尚妈咪包多功能大容量妈妈双肩背包2024新款"
-            
-            item_data['title'] = title
-            print(f"    📌 [标题]: {title}")
-            
-            # 2. 价格
-            price_ele = page.ele('.kxqW0mMz', timeout=2)
-            price = price_ele.text if price_ele else "50"
-            item_data['price'] = price
-            print(f"    💰 [价格]: {price}")
-            
-            # 3. 详情
-            detail_ele = page.ele('.jvsKAdEs', timeout=2)
-            if detail_ele:
-                raw_text = detail_ele.text
-                parts = [p.strip() for p in raw_text.split('\n') if p.strip()]
-                formatted_pairs = []
-                for k in range(0, len(parts) - 1, 2):
-                    formatted_pairs.append(f"{parts[k]}:{parts[k+1]}")
-                detail_str = " ".join(formatted_pairs)
-                item_data['details'] = detail_str
-            else:
-                item_data['details'] = "无详情"
-            
-            # 4. 主图 (用于基础商品)
-            item_data['images'] = []
-            img_container = page.ele('.PPuOGFfM', timeout=2)
-            if img_container:
-                img = img_container.ele('tag:img')
-                if img:
-                    img_url = img.link or img.attr('data-src') or img.attr('data-url')
-                    if img_url:
-                        if img_url.startswith('//'): img_url = 'https:' + img_url
-                        item_data['images'].append(img_url)
-            
-            # 3.1 规格 (新增)
-            print("    📏 [规格]: 正在提取...")
-            specs = []
-            
-            # 尝试点击“规格/参数”展开按钮 (用户指定的 class: PfNbVesQ)
             try:
-                expand_btn = page.ele('.PfNbVesQ')
-                if expand_btn:
-                    print("      👆 点击规格展开按钮 (.PfNbVesQ)...")
-                    expand_btn.click()
-                    time.sleep(2) # 等待展开或弹窗
-            except Exception as e:
-                print(f"      ⚠️ 点击展开按钮失败: {e}")
-
-            # 采集已选规格 (键值对)
-            spec_keys = page.eles('.sku-specs-key')
-            spec_values = page.eles('.J109_25J')
-            
-            if spec_keys and spec_values:
-                min_len = min(len(spec_keys), len(spec_values))
-                for k in range(min_len):
-                    key_text = spec_keys[k].text.strip()
-                    val_text = spec_values[k].text.strip()
-                    if key_text and val_text:
-                        specs.append({"name": key_text, "value": val_text})
-                        print(f"      - {key_text}: {val_text}")
-            
-            # 3.2 尝试采集所有可选变体 (SKU Options)
-            print("    🎨 [变体]: 正在尝试提取所有选项...")
-            variations = {} 
-            
-            # 增加一点等待，确保 DOM 完全更新
-            time.sleep(1)
-            
-            # 查找所有规格组名
-            spec_groups = page.eles('.sku-specs-key') # 规格组名 (用户提供)
+                current_cards = page.eles('._3glhOBhU')
+                if not current_cards or i >= len(current_cards):
+                    print(f"    ⚠️ 无法获取第 {i+1} 个卡片")
+                    continue
                 
-            if spec_groups:
-                print(f"      🔎 找到 {len(spec_groups)} 个规格组")
+                card = current_cards[i]
+                search_page_url = page.url
                 
-                for group in spec_groups:
-                    # 提取组名
-                    full_group_text = group.text.strip()
-                    group_name = full_group_text.split('\n')[0].replace(':', '').replace('：', '').strip()
-                    if not group_name: continue
-                    
-                    # 找到该规格组下的选项容器 (.s1O5M5fO)
-                    container = group.parent().ele('.s1O5M5fO')
-                    if not container:
-                        container = group.parent().parent().ele('.s1O5M5fO')
-                    
-                    if container:
-                        # 提取容器内的所有选项按钮
-                        opts = container.children()
-                        if not opts: continue
-                        
-                        print(f"      📦 规格组 [{group_name}] 包含 {len(opts)} 个选项 (.s1O5M5fO 容器内)")
-                        variations[group_name] = []
-                        
-                        # 使用索引遍历，以便重新获取元素（防止 DOM 刷新导致元素失效）
-                        for i in range(len(opts)):
-                            # 重新获取当前选项元素
-                            opts = container.children()
-                            if i >= len(opts): break
-                            opt = opts[i]
-                            
-                            opt_data = {"text": "", "image": "", "price": ""}
-                            
-                            # 1. 获取文本
-                            raw_text = opt.text.strip()
-                            if not raw_text: continue
-                            
-                            lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
-                            exclude_keywords = ["即将卖完", "已售罄", "缺货", "最后", "件", "库存", "件起批"]
-                            valid_lines = []
-                            for l in lines:
-                                if any(k in l for k in exclude_keywords): continue
-                                if l.startswith('¥') or l.startswith('￥'): continue
-                                if l.isdigit(): continue
-                                valid_lines.append(l)
-                            
-                            text = valid_lines[0] if valid_lines else raw_text
-                            opt_data["text"] = text.split('\n')[0].strip()
-                            
-                            # 2. 点击变体 (用户要求: 点击后图片链接会变)
-                            try:
-                                # 记录点击前的图片 src (调试用)
-                                pre_img = opt.ele('.O7pEFvHR', timeout=0.1)
-                                pre_src = pre_img.attr('src') if pre_img else "无"
-                                
-                                # 尝试点击
-                                try:
-                                    opt.click()
-                                except:
-                                    page.run_js('arguments[0].click()', opt)
-                                    
-                                time.sleep(1.0) # 等待图片加载/变化
-                                
-                                # 3. 获取图片 (点击后获取 class=O7pEFvHR 的 src)
-                                # 用户指示: 变体图不是变体按钮内，是在 class=O7pEFvHR 的 div 中
-                                # 因此在 page 级别查找
-                                img_container = page.ele('.O7pEFvHR', timeout=0.5)
-                                if img_container:
-                                    # 如果容器本身是 img
-                                    if img_container.tag == 'img':
-                                        img_ele = img_container
-                                    else:
-                                        # 否则查找内部的 img
-                                        img_ele = img_container.ele('tag:img')
-                                    
-                                    if img_ele:
-                                        src = img_ele.attr('src') or img_ele.link or img_ele.attr('data-src') or img_ele.attr('data-url')
-                                        if src:
-                                            if src.startswith('//'): src = 'https:' + src
-                                            opt_data["image"] = src
-                                            # print(f"          DEBUG: 获取到图片 {src}")
-                                
-                                if not opt_data["image"]:
-                                    # 尝试获取顶部大图作为兜底
-                                    big_img = page.ele('.PPuOGFfM img', timeout=0.1)
-                                    if big_img:
-                                        src = big_img.attr('src') or big_img.link
-                                        if src:
-                                            if src.startswith('//'): src = 'https:' + src
-                                            opt_data["image"] = src
-                                            # print(f"          DEBUG: 使用顶部大图兜底 {src}")
-                                
-                                # 4. 获取价格
-                                price_ele = page.ele('.ujEqGzEB', timeout=1)
-                                if price_ele:
-                                    opt_data["price"] = price_ele.text.strip()
-                                    
-                            except Exception as e:
-                                print(f"        ⚠️ 变体交互失败: {e}")
-                                
-                            variations[group_name].append(opt_data)
-                            print(f"        ✅ {group_name}: {opt_data['text']} -> {opt_data['price']} (图片: {'有' if opt_data['image'] else '无'})")
-            else:
-                print("      ⚠️ 未找到规格组 (.sku-specs-key)")
-
-            item_data['variations_detail'] = variations
-            # 为了兼容旧代码，保留简单的 variations 格式
-            item_data['variations'] = {k: [o['text'] for o in v] for k, v in variations.items()}
-            item_data['specs'] = specs
-            
-            # 4. 图片下载
-            item_data['images'] = []
-            if enable_download:
-                print("    🖼️ 正在下载图片...")
-                img_containers = page.eles('.PPuOGFfM')
-                if img_containers:
-                    save_dir = f"pdd_images/{keyword}_{count+1}_{int(time.time())}"
-                    if not os.path.exists(save_dir):
-                        os.makedirs(save_dir, exist_ok=True)
-                    
-                    downloaded_count = 0
-                    for idx, container in enumerate(img_containers):
-                        if idx >= 5: break # 最多下载5张
-                        img = container.ele('tag:img')
-                        if img:
-                            src = img.link or img.attr('data-src') or img.attr('data-url')
-                            if src:
-                                if src.startswith('//'): src = 'https:' + src
-                                try:
-                                    res = requests.get(src, timeout=5)
-                                    if res.status_code == 200:
-                                        img_path = f"{save_dir}/{idx}.jpg"
-                                        with open(img_path, 'wb') as f:
-                                            f.write(res.content)
-                                        item_data['images'].append(os.path.abspath(img_path))
-                                        downloaded_count += 1
-                                except:
-                                    pass
-                    print(f"      ✅ 已下载 {downloaded_count} 张图片到 {save_dir}")
-            
-            items_list.append(item_data)
-            count += 1
-            
-            print("    🔙 后退...")
-            page.back()
-            time.sleep(2)
-            
-        except Exception as e:
-            print(f"    ❌ 处理出错: {e}")
-            if "search_result" not in page.url:
-                page.back()
+                card.click()
                 time.sleep(3)
-    
-    print("🏁 [Agent] 采集完成，关闭采集标签页...")
-    page.close()
-    return items_list
+                
+                if page.url == search_page_url:
+                    print("    ⚠️ 点击未跳转")
+                    continue
+                    
+                print(f"    📄 进入详情页: {page.title[:20]}...")
+                
+                item_data = {}
+                item_data['url'] = page.url
+                
+                # 1. 标题
+                title_ele = page.ele('.Vrv3bF_E', timeout=5)
+                if not title_ele: title_ele = page.ele('._2_v_q_q_')
+                if not title_ele: title_ele = page.ele('tag:h1')
+                
+                title = title_ele.text if title_ele else page.title
+                if not title or title == "拼多多": 
+                    title = "时尚妈咪包多功能大容量妈妈双肩背包2024新款"
+                
+                item_data['title'] = title
+                print(f"    📌 [标题]: {title}")
+                
+                # 2. 价格
+                price_ele = page.ele('.kxqW0mMz', timeout=2)
+                price = price_ele.text if price_ele else "50"
+                item_data['price'] = price
+                print(f"    💰 [价格]: {price}")
+                
+                # 3. 详情
+                detail_ele = page.ele('.jvsKAdEs', timeout=2)
+                if detail_ele:
+                    raw_text = detail_ele.text
+                    parts = [p.strip() for p in raw_text.split('\n') if p.strip()]
+                    formatted_pairs = []
+                    for k in range(0, len(parts) - 1, 2):
+                        formatted_pairs.append(f"{parts[k]}:{parts[k+1]}")
+                    detail_str = " ".join(formatted_pairs)
+                    item_data['details'] = detail_str
+                else:
+                    item_data['details'] = "无详情"
+                
+                # 4. 主图 (用于基础商品)
+                item_data['images'] = []
+                img_container = page.ele('.PPuOGFfM', timeout=2)
+                if img_container:
+                    img = img_container.ele('tag:img')
+                    if img:
+                        img_url = img.link or img.attr('data-src') or img.attr('data-url')
+                        if img_url:
+                            if img_url.startswith('//'): img_url = 'https:' + img_url
+                            item_data['images'].append(img_url)
+                
+                # 3.1 规格 (新增)
+                print("    📏 [规格]: 正在提取...")
+                specs = []
+                
+                # 尝试点击“规格/参数”展开按钮 (用户指定的 class: PfNbVesQ)
+                try:
+                    expand_btn = page.ele('.PfNbVesQ')
+                    if expand_btn:
+                        print("      👆 点击规格展开按钮 (.PfNbVesQ)...")
+                        expand_btn.click()
+                        time.sleep(2) # 等待展开或弹窗
+                except Exception as e:
+                    print(f"      ⚠️ 点击展开按钮失败: {e}")
+
+                # 采集已选规格 (键值对)
+                spec_keys = page.eles('.sku-specs-key')
+                spec_values = page.eles('.J109_25J')
+                
+                if spec_keys and spec_values:
+                    min_len = min(len(spec_keys), len(spec_values))
+                    for k in range(min_len):
+                        key_text = spec_keys[k].text.strip()
+                        val_text = spec_values[k].text.strip()
+                        if key_text and val_text:
+                            specs.append({"name": key_text, "value": val_text})
+                            print(f"      - {key_text}: {val_text}")
+                
+                # 3.2 尝试采集所有可选变体 (SKU Options)
+                print("    🎨 [变体]: 正在尝试提取所有选项...")
+                variations = {} 
+                sku_map = {} # Key: "i-j" or "i", Value: {price: ..., specs: ...}
+                
+                time.sleep(1)
+                
+                # 1. 识别规格组
+                spec_groups_eles = page.eles('.sku-specs-key')
+                group_names = []
+                for g in spec_groups_eles:
+                    name = g.text.strip().split('\n')[0].replace(':', '').replace('：', '').strip()
+                    if name: group_names.append(name)
+                
+                if not group_names:
+                    print("      ⚠️ 未找到规格组 (.sku-specs-key)")
+                else:
+                    print(f"      🔎 找到 {len(group_names)} 个规格组: {group_names}")
+                    for gn in group_names:
+                        variations[gn] = []
+                    
+                    # 辅助函数：获取选项元素
+                    def get_options_eles(group_index):
+                        groups = page.eles('.sku-specs-key')
+                        if group_index >= len(groups): return []
+                        g_ele = groups[group_index]
+                        container = g_ele.parent().ele('.s1O5M5fO')
+                        if not container: container = g_ele.parent().parent().ele('.s1O5M5fO')
+                        return container.children() if container else []
+
+                    # 辅助函数：提取选项文本
+                    def extract_opt_text(ele):
+                        raw = ele.text.strip()
+                        if not raw: return ""
+                        lines = [l.strip() for l in raw.split('\n') if l.strip()]
+                        exclude = ["即将卖完", "已售罄", "缺货", "最后", "件", "库存", "件起批"]
+                        valid = [l for l in lines if not any(k in l for k in exclude) and not l.startswith('¥') and not l.isdigit()]
+                        return valid[0] if valid else raw.split('\n')[0]
+
+                    # 获取各层选项数量
+                    counts = []
+                    for idx in range(len(group_names)):
+                        counts.append(len(get_options_eles(idx)))
+                    
+                    if len(counts) > 0 and counts[0] > 0:
+                        # 遍历第一层
+                        for i in range(counts[0]):
+                            # 点击第一层
+                            opts_0 = get_options_eles(0)
+                            if i >= len(opts_0): break
+                            opt_0 = opts_0[i]
+                            text_0 = extract_opt_text(opt_0)
+                            
+                            try:
+                                opt_0.click()
+                            except:
+                                page.run_js('arguments[0].click()', opt_0)
+                            time.sleep(0.5)
+                            
+                            # 采集图片 (仅第一层)
+                            img_src = ""
+                            img_container = page.ele('.O7pEFvHR', timeout=0.5)
+                            if img_container:
+                                img_ele = img_container if img_container.tag == 'img' else img_container.ele('tag:img')
+                                if img_ele:
+                                    src = img_ele.attr('src') or img_ele.link or img_ele.attr('data-src')
+                                    if src: img_src = 'https:' + src if src.startswith('//') else src
+                            if not img_src:
+                                big_img = page.ele('.PPuOGFfM img', timeout=0.1)
+                                if big_img:
+                                    src = big_img.attr('src') or big_img.link
+                                    if src: img_src = 'https:' + src if src.startswith('//') else src
+
+                            # 记录第一层选项
+                            if not any(o['text'] == text_0 for o in variations[group_names[0]]):
+                                variations[group_names[0]].append({"text": text_0, "image": img_src})
+
+                            # 如果有第二层
+                            if len(counts) > 1 and counts[1] > 0:
+                                for j in range(counts[1]):
+                                    opts_1 = get_options_eles(1)
+                                    if j >= len(opts_1): break
+                                    opt_1 = opts_1[j]
+                                    text_1 = extract_opt_text(opt_1)
+                                    
+                                    try:
+                                        opt_1.click()
+                                    except:
+                                        page.run_js('arguments[0].click()', opt_1)
+                                    
+                                    # 等待价格更新 (用户强调价格可能不同，需确保 DOM 更新)
+                                    time.sleep(0.5)
+                                    
+                                    # 获取价格 (class=ujEqGzEB)
+                                    price = "0"
+                                    price_ele = page.ele('.ujEqGzEB', timeout=2)
+                                    if price_ele: 
+                                        price = price_ele.text.strip()
+                                    else:
+                                        # 再次尝试获取
+                                        time.sleep(0.5)
+                                        price_ele = page.ele('.ujEqGzEB', timeout=2)
+                                        if price_ele: price = price_ele.text.strip()
+                                    
+                                    # 记录 SKU
+                                    sku_map[f"{i}-{j}"] = {"price": price, "specs": [text_0, text_1]}
+                                    print(f"        ✅ 组合: {text_0} + {text_1} -> {price}")
+                                    
+                                    # 记录第二层选项
+                                    if not any(o['text'] == text_1 for o in variations[group_names[1]]):
+                                        variations[group_names[1]].append({"text": text_1, "image": ""})
+                            else:
+                                # 只有一层
+                                price = "0"
+                                price_ele = page.ele('.ujEqGzEB', timeout=1)
+                                if price_ele: price = price_ele.text.strip()
+                                
+                                sku_map[f"{i}"] = {"price": price, "specs": [text_0]}
+                                print(f"        ✅ {text_0} -> {price}")
+                                
+                                # 更新第一层选项的价格
+                                variations[group_names[0]][-1]['price'] = price
+                
+                item_data['sku_map'] = sku_map
+
+                item_data['variations_detail'] = variations
+                # 为了兼容旧代码，保留简单的 variations 格式
+                item_data['variations'] = {k: [o['text'] for o in v] for k, v in variations.items()}
+                item_data['specs'] = specs
+                
+                # 4. 图片下载
+                item_data['images'] = []
+                if enable_download:
+                    print("    🖼️ 正在下载图片...")
+                    img_containers = page.eles('.PPuOGFfM')
+                    if img_containers:
+                        save_dir = f"pdd_images/{keyword}_{count+1}_{int(time.time())}"
+                        if not os.path.exists(save_dir):
+                            os.makedirs(save_dir, exist_ok=True)
+                        
+                        downloaded_count = 0
+                        for idx, container in enumerate(img_containers):
+                            if idx >= 5: break # 最多下载5张
+                            img = container.ele('tag:img')
+                            if img:
+                                src = img.link or img.attr('data-src') or img.attr('data-url')
+                                if src:
+                                    if src.startswith('//'): src = 'https:' + src
+                                    try:
+                                        res = requests.get(src, timeout=5)
+                                        if res.status_code == 200:
+                                            img_path = f"{save_dir}/{idx}.jpg"
+                                            with open(img_path, 'wb') as f:
+                                                f.write(res.content)
+                                            item_data['images'].append(os.path.abspath(img_path))
+                                            downloaded_count += 1
+                                    except:
+                                        pass
+                        print(f"      ✅ 已下载 {downloaded_count} 张图片到 {save_dir}")
+                
+                yield item_data
+                count += 1
+                
+                print("    🔙 后退...")
+                page.back()
+                time.sleep(2)
+                
+            except Exception as e:
+                print(f"    ❌ 处理出错: {e}")
+                if "search_result" not in page.url:
+                    page.back()
+                    time.sleep(3)
+    finally:
+        print("🏁 [Agent] 采集完成，关闭采集标签页...")
+        page.close()
 
 if __name__ == "__main__":
     # 测试代码
