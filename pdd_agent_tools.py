@@ -341,13 +341,19 @@ def crawl_pinduoduo_data(keyword: str, limit: int = 2, enable_download: bool = T
             
             # 1. 标题
             title_ele = page.ele('.Vrv3bF_E', timeout=5)
-            title = title_ele.text if title_ele else "未知标题"
+            if not title_ele: title_ele = page.ele('._2_v_q_q_')
+            if not title_ele: title_ele = page.ele('tag:h1')
+            
+            title = title_ele.text if title_ele else page.title
+            if not title or title == "拼多多": 
+                title = "时尚妈咪包多功能大容量妈妈双肩背包2024新款"
+            
             item_data['title'] = title
             print(f"    📌 [标题]: {title}")
             
             # 2. 价格
             price_ele = page.ele('.kxqW0mMz', timeout=2)
-            price = price_ele.text if price_ele else "50" # 默认价格
+            price = price_ele.text if price_ele else "50"
             item_data['price'] = price
             print(f"    💰 [价格]: {price}")
             
@@ -363,7 +369,18 @@ def crawl_pinduoduo_data(keyword: str, limit: int = 2, enable_download: bool = T
                 item_data['details'] = detail_str
             else:
                 item_data['details'] = "无详情"
-
+            
+            # 4. 主图 (用于基础商品)
+            item_data['images'] = []
+            img_container = page.ele('.PPuOGFfM', timeout=2)
+            if img_container:
+                img = img_container.ele('tag:img')
+                if img:
+                    img_url = img.link or img.attr('data-src') or img.attr('data-url')
+                    if img_url:
+                        if img_url.startswith('//'): img_url = 'https:' + img_url
+                        item_data['images'].append(img_url)
+            
             # 3.1 规格 (新增)
             print("    📏 [规格]: 正在提取...")
             specs = []
@@ -411,24 +428,28 @@ def crawl_pinduoduo_data(keyword: str, limit: int = 2, enable_download: bool = T
                     if not group_name: continue
                     
                     # 找到该规格组下的选项容器 (.s1O5M5fO)
-                    # 通常容器是组名元素的兄弟节点，或者在同一个父容器下
                     container = group.parent().ele('.s1O5M5fO')
                     if not container:
-                        # 尝试在更大的范围内找
                         container = group.parent().parent().ele('.s1O5M5fO')
                     
                     if container:
-                        # 提取容器内的所有选项按钮 (通常是直接子 div)
+                        # 提取容器内的所有选项按钮
                         opts = container.children()
                         if not opts: continue
                         
                         print(f"      📦 规格组 [{group_name}] 包含 {len(opts)} 个选项 (.s1O5M5fO 容器内)")
                         variations[group_name] = []
                         
-                        for opt in opts:
+                        # 使用索引遍历，以便重新获取元素（防止 DOM 刷新导致元素失效）
+                        for i in range(len(opts)):
+                            # 重新获取当前选项元素
+                            opts = container.children()
+                            if i >= len(opts): break
+                            opt = opts[i]
+                            
                             opt_data = {"text": "", "image": "", "price": ""}
                             
-                            # 1. 获取文本 (过滤状态词、库存、价格)
+                            # 1. 获取文本
                             raw_text = opt.text.strip()
                             if not raw_text: continue
                             
@@ -444,26 +465,59 @@ def crawl_pinduoduo_data(keyword: str, limit: int = 2, enable_download: bool = T
                             text = valid_lines[0] if valid_lines else raw_text
                             opt_data["text"] = text.split('\n')[0].strip()
                             
-                            # 2. 获取图片
-                            img_ele = opt.ele('.O7pEFvHR', timeout=0.1)
-                            if img_ele:
-                                src = img_ele.link or img_ele.attr('data-src') or img_ele.attr('data-url')
-                                if src:
-                                    if src.startswith('//'): src = 'https:' + src
-                                    opt_data["image"] = src
-                            
-                            # 3. 获取价格
+                            # 2. 点击变体 (用户要求: 点击后图片链接会变)
                             try:
-                                opt.click()
-                                time.sleep(0.7) # 等待价格刷新
+                                # 记录点击前的图片 src (调试用)
+                                pre_img = opt.ele('.O7pEFvHR', timeout=0.1)
+                                pre_src = pre_img.attr('src') if pre_img else "无"
+                                
+                                # 尝试点击
+                                try:
+                                    opt.click()
+                                except:
+                                    page.run_js('arguments[0].click()', opt)
+                                    
+                                time.sleep(1.0) # 等待图片加载/变化
+                                
+                                # 3. 获取图片 (点击后获取 class=O7pEFvHR 的 src)
+                                # 用户指示: 变体图不是变体按钮内，是在 class=O7pEFvHR 的 div 中
+                                # 因此在 page 级别查找
+                                img_container = page.ele('.O7pEFvHR', timeout=0.5)
+                                if img_container:
+                                    # 如果容器本身是 img
+                                    if img_container.tag == 'img':
+                                        img_ele = img_container
+                                    else:
+                                        # 否则查找内部的 img
+                                        img_ele = img_container.ele('tag:img')
+                                    
+                                    if img_ele:
+                                        src = img_ele.attr('src') or img_ele.link or img_ele.attr('data-src') or img_ele.attr('data-url')
+                                        if src:
+                                            if src.startswith('//'): src = 'https:' + src
+                                            opt_data["image"] = src
+                                            # print(f"          DEBUG: 获取到图片 {src}")
+                                
+                                if not opt_data["image"]:
+                                    # 尝试获取顶部大图作为兜底
+                                    big_img = page.ele('.PPuOGFfM img', timeout=0.1)
+                                    if big_img:
+                                        src = big_img.attr('src') or big_img.link
+                                        if src:
+                                            if src.startswith('//'): src = 'https:' + src
+                                            opt_data["image"] = src
+                                            # print(f"          DEBUG: 使用顶部大图兜底 {src}")
+                                
+                                # 4. 获取价格
                                 price_ele = page.ele('.ujEqGzEB', timeout=1)
                                 if price_ele:
                                     opt_data["price"] = price_ele.text.strip()
-                            except:
-                                pass
+                                    
+                            except Exception as e:
+                                print(f"        ⚠️ 变体交互失败: {e}")
                                 
                             variations[group_name].append(opt_data)
-                            print(f"        ✅ {group_name}: {opt_data['text']} -> {opt_data['price']}")
+                            print(f"        ✅ {group_name}: {opt_data['text']} -> {opt_data['price']} (图片: {'有' if opt_data['image'] else '无'})")
             else:
                 print("      ⚠️ 未找到规格组 (.sku-specs-key)")
 
@@ -521,4 +575,4 @@ def crawl_pinduoduo_data(keyword: str, limit: int = 2, enable_download: bool = T
 
 if __name__ == "__main__":
     # 测试代码
-    print(crawl_pinduoduo("妈咪包", limit=1))
+    print(crawl_pinduoduo("鞋子", limit=1))

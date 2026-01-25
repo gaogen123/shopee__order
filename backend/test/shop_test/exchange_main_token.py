@@ -45,6 +45,6 @@ def exchange_token_for_main_account(code, main_account_id):
         print(f"Error: {e}")
 
 if __name__ == "__main__":
-    CODE = "4374624768694d534661755a76746a68"
+    CODE = "534d4e53646a67575469454259776d61"
     MAIN_ACCOUNT_ID = 781654
     exchange_token_for_main_account(CODE, MAIN_ACCOUNT_ID)
