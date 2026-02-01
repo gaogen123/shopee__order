@@ -30,8 +30,8 @@ router = APIRouter()
 
 class CostUpdate(BaseModel):
     """订单成本更新模型"""
-    cost: float | None = None  # 订单总成本（遗留字段）
-    total_cost: float | None = None  # 订单总成本
+    cost: Optional[float] = None  # 订单总成本（遗留字段）
+    total_cost: Optional[float] = None  # 订单总成本
     # 注意：purchase_cost 和 domestic_shipping_cost 现在在商品级别，通过 ItemCostUpdate 更新
 
 class ItemCostUpdate(BaseModel):

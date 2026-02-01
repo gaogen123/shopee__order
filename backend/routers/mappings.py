@@ -17,6 +17,9 @@ import sqlite3
 import time
 
 # 导入数据库连接
+from typing import Optional
+
+# 导入数据库连接
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -31,7 +34,7 @@ class MappingBase(BaseModel):
     site_id: str                    # 站点ID（如"SG"、"MY"等）
     shop_id: str                    # 店铺ID
     item_id: int                    # 商品ID
-    sku_id: str | None = None       # SKU ID，可选
+    sku_id: Optional[str] = None       # SKU ID，可选
     product_name: str               # 商品名称
     purchase_cost: float            # 采购成本
     domestic_shipping_cost: float   # 国内物流成本

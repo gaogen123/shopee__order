@@ -472,13 +472,14 @@ const mockOrders: Order[] = [
 
 import { Sidebar } from "./components/Sidebar";
 import { PddAgent } from "./components/PddAgent";
+import { SelectionGuide } from "./components/SelectionGuide";
 
 
 
 // ... (existing helper function nearby, handled via imports)
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<'dashboard' | 'orders' | 'mappings' | 'pdd'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'orders' | 'mappings' | 'pdd' | 'selection-guide'>('dashboard');
   const [searchQuery, setSearchQuery] = useState("");
 
   // Default date range: Last 30 days
@@ -1238,7 +1239,7 @@ export default function App() {
     return Array.from(productMap.values());
   }, [orders]);
 
-  const handleTabChange = (tab: 'dashboard' | 'orders' | 'mappings') => {
+  const handleTabChange = (tab: 'dashboard' | 'orders' | 'mappings' | 'pdd' | 'selection-guide') => {
     setCurrentView(tab);
     setSelectedOrderDetail(null);
   };
@@ -1456,7 +1457,13 @@ export default function App() {
               mode="embedded"
             />
           </div>
+        ) : currentView === 'selection-guide' ? (
+          /* Selection Guide View */
+          <div className="flex-1 overflow-hidden h-full">
+            <SelectionGuide />
+          </div>
         ) : (
+          /* PDD Agent View */
           /* PDD Agent View */
           <div className="flex-1 overflow-hidden h-full">
             <ShopeeAssistant />

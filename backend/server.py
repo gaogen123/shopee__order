@@ -65,7 +65,8 @@ from routers.orders import router as orders_router
 from routers.sync import router as sync_router
 from routers.mappings import router as mappings_router
 from routers.shops import router as shops_router
-from routers.agent import router as agent_router
+# from routers.agent import router as agent_router
+from routers.selection import router as selection_router
 
 def refresh_all_shop_tokens():
     try:
@@ -118,7 +119,8 @@ app.include_router(orders_router)
 app.include_router(sync_router)
 app.include_router(mappings_router)
 app.include_router(shops_router)
-app.include_router(agent_router)
+# app.include_router(agent_router)
+app.include_router(selection_router)
 
 # Mount images directory
 app.mount("/pdd_images", StaticFiles(directory=IMAGES_DIR), name="pdd_images")

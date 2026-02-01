@@ -1,9 +1,9 @@
-import { LayoutGrid, Package, BarChart2, Bot } from "lucide-react";
+import { LayoutGrid, Package, BarChart2, Bot, Globe } from "lucide-react";
 import { cn } from "./ui/utils";
 
 interface SidebarProps {
-    activeTab: 'dashboard' | 'orders' | 'mappings' | 'pdd';
-    onTabChange: (tab: 'dashboard' | 'orders' | 'mappings' | 'pdd') => void;
+    activeTab: 'dashboard' | 'orders' | 'mappings' | 'pdd' | 'selection-guide';
+    onTabChange: (tab: 'dashboard' | 'orders' | 'mappings' | 'pdd' | 'selection-guide') => void;
 }
 
 export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
@@ -56,6 +56,20 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
                 >
                     <Package className={cn("w-5 h-5", activeTab === 'mappings' ? "text-white" : "text-gray-400")} />
                     移动映射管理
+                </button>
+
+                <button
+                    onClick={() => onTabChange('selection-guide')}
+                    className={cn(
+                        "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium text-sm",
+                        activeTab === 'selection-guide'
+                            ? "bg-blue-600 text-white shadow-lg shadow-blue-900/20"
+                            : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    )}
+                    style={activeTab === 'selection-guide' ? { backgroundColor: '#ea580c', color: 'white' } : {}}
+                >
+                    <Globe className={cn("w-5 h-5", activeTab === 'selection-guide' ? "text-white" : "text-gray-400")} />
+                    选品指南
                 </button>
 
                 <button
