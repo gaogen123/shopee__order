@@ -1,152 +1,123 @@
-import * as React from "react";
 import { Calendar as CalendarIcon } from "lucide-react";
-import { DateRange, DayPicker } from "react-day-picker";
-import * as Popover from "@radix-ui/react-popover";
+import { DateRange } from "react-day-picker";
+import { zhCN } from "date-fns/locale";
+import { useEffect, useState } from "react";
 
-// Simple formatter that ensures local date string
-const formatDate = (date: Date | undefined) => {
-    if (!date) return "";
+import { cn } from "./ui/utils";
+import { Button } from "./ui/button";
+import { Calendar } from "./ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "./ui/popover";
+
+interface DateRangePickerProps {
+  startDate: string;
+  endDate: string;
+  onChange: (start: string, end: string) => void;
+  className?: string;
+}
+
+export function DateRangePicker({
+  startDate,
+  endDate,
+  onChange,
+  className,
+}: DateRangePickerProps) {
+  // 简单的日期解析函数: "YYYY-MM-DD" -> Date
+  const parseDate = (dateStr: string) => {
+    if (!dateStr) return undefined;
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return undefined;
+    const [y, m, d] = parts.map(Number);
+    if (isNaN(y) || isNaN(m) || isNaN(d)) return undefined;
+    return new Date(y, m - 1, d);
+  };
+
+  // 简单的日期格式化函数: Date -> "YYYY-MM-DD"
+  const formatDate = (date: Date) => {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
-};
+  };
 
-interface DateRangePickerProps {
-    startDate: string;
-    endDate: string;
-    onChange: (start: string, end: string) => void;
-}
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: parseDate(startDate),
+    to: parseDate(endDate),
+  });
 
-export function DateRangePicker({ startDate, endDate, onChange }: DateRangePickerProps) {
-    const [date, setDate] = React.useState<DateRange | undefined>({
-        from: startDate ? new Date(startDate + "T00:00:00") : undefined,
-        to: endDate ? new Date(endDate + "T00:00:00") : undefined,
-    });
+  // 当外部 props 变化时同步内部状态
+  useEffect(() => {
+    const from = parseDate(startDate);
+    const to = parseDate(endDate);
 
-    const handleSelect = (range: DateRange | undefined) => {
-        setDate(range);
-        if (range?.from) {
-            const start = formatDate(range.from);
-            const end = range.to ? formatDate(range.to) : start; // If only one selected, make it same day
-            onChange(start, end);
-        }
-    };
+    // 避免不必要的更新
+    if (
+      from?.getTime() !== date?.from?.getTime() ||
+      to?.getTime() !== date?.to?.getTime()
+    ) {
+      setDate({ from, to });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startDate, endDate]);
 
-    return (
-        <div className="grid gap-2">
-            <Popover.Root>
-                <Popover.Trigger asChild>
-                    <button
-                        className="flex items-center bg-white border border-gray-300 rounded-md px-4 py-2 shadow-sm hover:border-blue-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all group min-w-[280px]"
-                    >
-                        <CalendarIcon className="mr-3 h-4 w-4 text-gray-400 group-hover:text-blue-500" />
-                        <div className="text-sm text-gray-700 flex items-center gap-3">
-                            <span className="font-medium">{startDate || "开始日期"}</span>
-                            <span className="text-gray-300 select-none font-light">至</span>
-                            <span className="font-medium">{endDate || "结束日期"}</span>
-                        </div>
-                    </button>
-                </Popover.Trigger>
-                <Popover.Portal>
-                    <Popover.Content
-                        className="z-50 w-auto bg-white p-0 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.15)] border border-gray-100 overflow-hidden animate-in fade-in zoom-in-95"
-                        align="end"
-                        sideOffset={8}
-                    >
-                        <div className="p-4 bg-gray-50 border-b flex items-center justify-between">
-                            <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">选择日期范围</span>
-                            <div className="flex gap-2 text-[10px]">
-                                <span className="px-2 py-0.5 bg-blue-100 text-blue-600 rounded">同步最多支持90天范围</span>
-                            </div>
-                        </div>
-                        <div className="p-4 bg-white">
-                            <DayPicker
-                                initialFocus
-                                mode="range"
-                                defaultMonth={date?.from}
-                                selected={date}
-                                onSelect={handleSelect}
-                                numberOfMonths={2}
-                                className="rdp-custom"
-                            />
-                        </div>
-                        <div className="flex justify-end gap-3 p-4 bg-gray-50 border-t">
-                            <button
-                                onClick={() => { setDate(undefined); onChange("", ""); }}
-                                className="px-4 py-1.5 text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-200 rounded-md transition-colors"
-                            >
-                                清空
-                            </button>
-                            <Popover.Close className="px-5 py-1.5 text-xs bg-blue-500 text-white rounded-md hover:bg-blue-600 shadow-sm transition-all active:scale-95">
-                                确定同步范围
-                            </Popover.Close>
-                        </div>
-                    </Popover.Content>
-                </Popover.Portal>
-            </Popover.Root>
+  const handleSelect = (newDate: DateRange | undefined) => {
+    setDate(newDate);
 
-            <style>{`
-        .rdp-custom {
-            --rdp-accent-color: #3b82f6;
-            --rdp-background-alpha: 0.1;
-            margin: 0;
-        }
-        .rdp-months { display: flex; gap: 1.5rem; }
-        .rdp-month { font-family: inherit; }
-        .rdp-caption { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            margin-bottom: 1.5rem; 
-            font-weight: 700;
-            color: #1f2937;
-        }
-        .rdp-caption_label { font-size: 0.9375rem; }
-        .rdp-nav { display: flex; gap: 0.5rem; }
-        .rdp-nav_button {
-            width: 1.75rem;
-            height: 1.75rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 99px;
-            color: #6b7280;
-            transition: all 0.2s;
-        }
-        .rdp-nav_button:hover { background-color: #f3f4f6; color: #111827; }
-        .rdp-head_cell { 
-            font-size: 0.75rem; 
-            font-weight: 600; 
-            color: #9ca3af; 
-            padding: 0.75rem 0.5rem;
-            text-align: center;
-        }
-        .rdp-cell { padding: 0.05rem; }
-        .rdp-day { 
-            width: 2.25rem; 
-            height: 2.25rem; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            border-radius: 0.5rem; 
-            cursor: pointer; 
-            font-size: 0.8125rem;
-            color: #374151;
-            transition: all 0.2s;
-        }
-        .rdp-day:hover { background-color: #eff6ff; color: #1d4ed8; }
-        .rdp-day_selected { background-color: var(--rdp-accent-color) !important; color: white !important; font-weight: 600; }
-        .rdp-day_outside { color: #d1d5db; opacity: 0.5; }
-        .rdp-day_range_middle { 
-            background-color: #eff6ff !important; 
-            color: #1d4ed8 !important;
-            border-radius: 0;
-        }
-        .rdp-day_range_start { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-        .rdp-day_range_end { border-top-left-radius: 0; border-bottom-left-radius: 0; }
-        .rdp-button:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
-      `}</style>
-        </div>
-    );
+    if (newDate?.from) {
+      const s = formatDate(newDate.from);
+      // 如果只有开始时间，结束时间暂取开始时间，或者等待用户选择结束时间
+      // 这里策略是：只要有 from，就尝试更新。如果有 to，则更新 range。
+      const e = newDate.to ? formatDate(newDate.to) : s;
+
+      // 只有当这是有效的范围更新时（或者至少选择了开始时间），才通知父组件
+      if (newDate.to) {
+        onChange(s, e);
+      }
+    }
+  };
+
+  return (
+    <div className={cn("grid gap-2", className)}>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            id="date"
+            variant={"outline"}
+            className={cn(
+              "w-[260px] justify-start text-left font-normal h-11 rounded-2xl bg-gray-100 border-transparent hover:bg-white hover:border-orange-500 transition-all text-sm",
+              !date && "text-muted-foreground"
+            )}
+          >
+            <CalendarIcon className="mr-2 h-4 w-4 text-gray-400" />
+            {date?.from ? (
+              date.to ? (
+                <span className="font-bold text-gray-900">
+                  {formatDate(date.from)} <span className="text-gray-400 mx-1">至</span> {formatDate(date.to)}
+                </span>
+              ) : (
+                <span className="font-bold text-gray-900">{formatDate(date.from)}</span>
+              )
+            ) : (
+              <span className="text-gray-400">选择日期范围</span>
+            )}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0 rounded-xl shadow-xl border-gray-100" align="end">
+          <Calendar
+            initialFocus
+            mode="range"
+            defaultMonth={date?.from}
+            selected={date}
+            onSelect={handleSelect}
+            numberOfMonths={2}
+            className="p-3"
+            locale={zhCN}
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
 }

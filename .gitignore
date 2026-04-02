@@ -56,3 +56,17 @@ logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Docker
+init.sql
+docker-compose.override.yml
+
+# Debug artifacts
+debug_page.html
+page5_debug.jpg
+
+# Local Database & Images
+mysql/
+mysql_data/
+mysql.zip
+pdd_images/

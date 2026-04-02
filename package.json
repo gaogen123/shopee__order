@@ -1,5 +1,5 @@
 {
-      "name": "Implement Shopee Order Page",
+      "name": "Optimize Web App",
       "version": "0.1.0",
       "private": true,
       "dependencies": {
@@ -40,17 +40,20 @@
             "react-day-picker": "^8.10.1",
             "react-dom": "^18.3.1",
             "react-hook-form": "^7.55.0",
+            "react-markdown": "^10.1.0",
             "react-resizable-panels": "^2.1.7",
             "recharts": "^2.15.2",
+            "remark-gfm": "^4.0.1",
             "sonner": "^2.0.3",
             "tailwind-merge": "*",
             "vaul": "^1.1.2"
       },
       "devDependencies": {
-            "@rollup/rollup-win32-x64-msvc": "^4.55.1",
-            "@swc/core-win32-x64-msvc": "^1.15.8",
             "@types/node": "^20.10.0",
-            "@vitejs/plugin-react-swc": "^3.10.2",
+            "@vitejs/plugin-react": "^4.3.3",
+            "autoprefixer": "^10.4.23",
+            "postcss": "^8.5.6",
+            "tailwindcss": "^3.4.17",
             "vite": "^7.3.0"
       },
       "scripts": {

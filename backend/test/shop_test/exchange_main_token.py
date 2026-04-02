@@ -17,6 +17,8 @@ def generate_sign(path, timestamp):
         hashlib.sha256
     ).hexdigest()
 
+from token_manager import save_tokens
+
 def exchange_token_for_main_account(code, main_account_id):
     path = "/api/v2/auth/token/get"
     timestamp = int(time.time())
@@ -33,13 +35,16 @@ def exchange_token_for_main_account(code, main_account_id):
     print(f"Exchanging token for Main Account ID: {main_account_id}")
     try:
         resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
-        print(f"Status Code: {resp.status_code}")
-        print("Response Body:")
-        print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
+        result = resp.json()
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        
+        if "access_token" in result:
+            save_tokens(main_account_id, result["access_token"], result["refresh_token"])
+            print(f"✅ Tokens saved for {main_account_id}")
     except Exception as e:
         print(f"Error: {e}")
 
 if __name__ == "__main__":
-    CODE = "68734a567a506b50475162495975624e"
+    CODE = "534d4e53646a67575469454259776d61"
     MAIN_ACCOUNT_ID = 781654
     exchange_token_for_main_account(CODE, MAIN_ACCOUNT_ID)
